@@ -16,7 +16,7 @@ Review paths:
 2. **Connect agent:** product and connection name → permissions → platform-specific connection boundary → explicitly simulated verification. Native authorization steps are not invented or implemented here.
 3. **Destinations:** account access and publishing defaults; only simulated changes. The catalog distinguishes existing YouTube integration from planned connectors.
 4. **Tasks:** progress, partial completion, retrying an optional operation on the same video, and field-level video settings/disclosures.
-5. **Settings:** placement for reachability and installation management.
+5. **Settings:** agent connection endpoint.
 
 The intended production behavior, migration, security model and acceptance gates are in [the workspace design](../multi-agent-workspace.md) and [YouTube settings design](../youtube-publishing-settings.md). The static renderer is disposable review code, not a proposed replacement for React/TanStack Query or production resource updates.
 

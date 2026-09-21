@@ -210,7 +210,7 @@ function task(id, settings) {
 function settings() {
   return (
     heading("Settings", "") +
-    `<div class="narrow"><section class="panel"><div class="panel-title"><h2>Agent connections</h2></div><div class="pad">${kv("Public endpoint", "https://bridge.example/mcp")}</div></section><section class="panel"><div class="panel-title"><h2>Storage and recovery</h2></div><div class="pad"><p>Not available in this preview.</p></div></section></div>`
+    `<div class="narrow"><section class="panel"><div class="panel-title"><h2>Agent connections</h2></div><div class="pad">${kv("Public endpoint", "https://bridge.example/mcp")}</div></section></div>`
   );
 }
 function missing() {
