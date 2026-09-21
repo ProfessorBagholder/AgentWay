@@ -187,4 +187,4 @@ Each slice is a focused PR with visual and behavioral checks, no unrelated resty
 
 ## UI copy rule
 
-Across every screen, include only labels, meaningful status, and concise help necessary for a decision or recovery. Omit slogans, design rationale, implementation commentary, obvious explanations and redundant footers. Keep technical/design discussion in this document. The review artifact has one global preview notice; individual screens should read like the product, not a narrated design presentation. Group destinations under prominent platform headings, with account identities below.
+Across every screen, include only labels, meaningful status, and concise help necessary for a decision or recovery. Omit slogans, design rationale, implementation commentary, obvious explanations and redundant footers. Keep technical/design discussion in this document. Prototypes follow the same rule: no preview banners or disclaimer furniture. Document artifact limitations in the README and delivery message. Group destinations under prominent platform headings, with account identities below.

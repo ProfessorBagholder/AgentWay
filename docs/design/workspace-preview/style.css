@@ -84,26 +84,11 @@ label {
   align-items: center;
   font-weight: 400;
 }
-.preview {
-  min-height: 42px;
-  background: #f0eefb;
-  border-bottom: 1px solid #ddd8f4;
-  padding: 7px 22px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  font-size: 12px;
-  color: #494267;
-}
-.preview button {
-  margin-left: auto;
-  padding: 4px 10px;
-  font-size: 12px;
-}
+
 .shell {
   display: grid;
   grid-template-columns: 208px 1fr;
-  min-height: calc(100vh - 43px);
+  min-height: 100vh;
 }
 aside {
   border-right: 1px solid #e7e8ed;
@@ -192,10 +177,9 @@ p {
 }
 .row {
   display: grid;
-  grid-template-columns: minmax(210px, 1.4fr) minmax(135px, 1fr) minmax(
-      145px,
-      1fr
-    ) 25px;
+  grid-template-columns:
+    minmax(210px, 1.4fr) minmax(135px, 1fr) minmax(145px, 1fr)
+    25px;
   gap: 20px;
   align-items: center;
   padding: 23px 24px;
@@ -430,14 +414,6 @@ th {
   }
 }
 @media (max-width: 620px) {
-  .preview {
-    flex-wrap: wrap;
-    gap: 5px 12px;
-  }
-  .preview span {
-    order: 3;
-    width: 100%;
-  }
   .shell {
     display: block;
   }

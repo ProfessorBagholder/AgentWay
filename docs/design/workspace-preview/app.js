@@ -278,9 +278,7 @@ main.addEventListener("click", (e) => {
     notice("Caption retry simulated. Existing video retained.");
   }
   if (b.dataset.action === "destination-demo")
-    notice(
-      "Account enrollment is unavailable in this preview.",
-    );
+    notice("Account enrollment is unavailable in this preview.");
 });
 main.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -330,29 +328,5 @@ main.addEventListener("submit", (e) => {
     location.hash = `/agents/${id}`;
     notice("Sample connection created. No real agent is connected.");
   }
-});
-document.querySelector("#reset").addEventListener("click", () => {
-  agents.splice(4);
-  agents.forEach((a, i) => {
-    a.state = i === 3 ? "Setup incomplete" : "Authorized";
-    a.access = i === 0;
-    a.delegate = i === 0;
-  });
-  defaults = {
-    category: "Entertainment",
-    visibility: "Private",
-    allowPublic: true,
-  };
-  retryDone = false;
-  wizard = {
-    step: 1,
-    product: "ChatGPT agents",
-    name: "",
-    publish: false,
-    delegate: false,
-  };
-  notice("Illustrative data reset.");
-  if (location.hash === "#/agents") render();
-  else location.hash = "/agents";
 });
 render();
