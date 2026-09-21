@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd -- "$(dirname -- "$0")"
+port=8787
+open_browser=true
+while (($#)); do
+  case "$1" in
+    --port) [[ $# -ge 2 ]] || { echo 'Missing port' >&2; exit 2; }; port="$2"; shift 2 ;;
+    --no-open) open_browser=false; shift ;;
+    *) echo "Usage: ./run [--port PORT] [--no-open]" >&2; exit 2 ;;
+  esac
+done
+[[ "$port" =~ ^[0-9]+$ && ${#port} -le 5 ]] && ((10#$port > 1023 && 10#$port < 65536)) || { echo 'Port must be 1024–65535.' >&2; exit 2; }
+command -v docker >/dev/null || { echo 'Install Docker with Compose, then run ./run again.' >&2; exit 1; }
+docker compose version >/dev/null
+docker info >/dev/null 2>&1 || { echo 'Start your Docker engine, then run ./run again.' >&2; exit 1; }
+export AGENTWAY_PORT="$port"
+url="http://127.0.0.1:$port"
+printf 'Building and starting AgentWay at %s…\n' "$url"
+if ! docker compose up --build --detach --wait --wait-timeout 120; then
+  docker compose logs --tail 60 >&2
+  echo 'Startup failed. If the port is occupied, use ./run --port 8788. No other process was stopped.' >&2
+  exit 1
+fi
+printf '\nAgentWay is ready: %s\nStop: ./stop   Logs: docker compose logs -f\n' "$url"
+if "$open_browser"; then
+  case "$(uname -s)" in
+    Darwin) open "$url" || printf 'Open %s in your browser.\n' "$url" ;;
+    Linux) if command -v xdg-open >/dev/null && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then xdg-open "$url" >/dev/null 2>&1 || true; fi ;;
+  esac
+fi

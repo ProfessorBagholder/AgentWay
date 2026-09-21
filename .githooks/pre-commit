@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+expected='ProfessorBagholder <322563513+ProfessorBagholder@users.noreply.github.com>'
+for field in GIT_AUTHOR_IDENT GIT_COMMITTER_IDENT; do
+    actual=$(git var "$field")
+    case "$actual" in
+        "$expected "*) ;;
+        *) printf 'AgentWay: refusing commit; %s must be %s\n' "$field" "$expected" >&2; exit 1 ;;
+    esac
+done

@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+expected_name='ProfessorBagholder'
+expected_email='322563513+ProfessorBagholder@users.noreply.github.com'
+zero='0000000000000000000000000000000000000000'
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ "$local_sha" = "$zero" ] && continue
+    if [ "$remote_sha" = "$zero" ]; then
+        range="$local_sha"
+    else
+        range="$remote_sha..$local_sha"
+    fi
+    commits=$(git rev-list "$range") || exit 1
+    for commit in $commits; do
+        if [ "$(git show -s --format=%an "$commit")" != "$expected_name" ] ||
+           [ "$(git show -s --format=%ae "$commit")" != "$expected_email" ] ||
+           [ "$(git show -s --format=%cn "$commit")" != "$expected_name" ] ||
+           [ "$(git show -s --format=%ce "$commit")" != "$expected_email" ]; then
+            printf 'AgentWay: refusing push; author/committer mismatch in %s\n' "$commit" >&2
+            exit 1
+        fi
+    done
+done

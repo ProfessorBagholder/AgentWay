@@ -1,0 +1,64 @@
+# AgentWay
+
+A personal bridge between the AI agents you already use and the places you publish.
+
+**Status: runnable foundation, not a finished agent integration.** Rust server, React frontend, SQLite persistence, task queue and selective live UI updates are implemented. Actual Grok Bot, Muse, ChatGPT and Claude connections, quota reporting, delegation, artifact transfer and publishing are not implemented yet. Registering an agent does not authenticate it. Saved tasks do not run or consume AI usage.
+
+## Run locally
+
+Prerequisite: Docker with Compose installed and the container engine running.
+
+```sh
+git clone https://github.com/ProfessorBagholder/AgentWay.git
+cd AgentWay
+./run
+```
+
+The launcher builds the checked-out code, applies migrations, waits for readiness, and opens the browser. Subsequent updates:
+
+```sh
+git pull
+./run
+```
+
+Default address: loopback port 8787. Use `./run --port 8788` for another port or `./run --no-open` on a headless machine. Windows: `./run.ps1` (PowerShell); use `-Port 8788` or `-NoOpen`. Stop with `./stop` or `docker compose stop`. Logs: `docker compose logs -f`.
+
+Data lives in the `agentway_agentway-data` Docker volume and survives rebuilds and stops. **Do not run `docker compose down -v` unless you intend to erase your data.** This foundation accepts only local browser access; remote/LAN hosting stays disabled until scoped authentication is implemented. No AI API keys are needed to try the UI.
+
+## Current behavior
+
+- Register actual agent identities and manager/worker roles. Every registration is clearly unconfigured.
+- Save and cancel assignments. Idempotent task requests avoid duplicate assignments.
+- View unknown capacity rather than fabricated allowance numbers.
+- Watch changes arrive in other open windows through replayable server-sent events. Mutation responses update individual resource caches; no document reload or dashboard refetch.
+- Restart the application without losing saved state.
+
+## Architecture
+
+Rust/Tokio + Axum + SQLx/SQLite. React/TypeScript + TanStack Query. Vite runs at build time; Rust serves the compiled frontend and API on one origin. There is no Node server in the running container. Native SQLite event polling is currently bounded at two reads/second per connected browser; browsers do not poll API resources. This simple implementation will gain centralized event fanout and retention before remote deployment. Bootstrap currently loads all locally saved registrations/tasks; pagination is a pre-scale milestone.
+
+Domain integration and MCP work are next. The official Rust MCP SDK will be integrated when a real agent round trip can be tested; this repository does not label a placeholder MCP endpoint as functional.
+
+## Contributing and checks
+
+Rust toolchain is pinned in `rust-toolchain.toml`; frontend dependencies are locked by `web/package-lock.json`.
+
+```sh
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+npm ci --prefix web
+npm run build --prefix web
+```
+
+For browser tests, start the local stack, then run `cd web && npx playwright install chromium && npm run test:e2e`. Tests create uniquely named registrations and tasks in the test server. Use `AGENTWAY_TEST_URL` to target a disposable instance; don't target a workspace containing important data.
+
+For native development, build the frontend then `cargo run -p agentway-server`. Override `DATABASE_URL`, `ASSET_DIR` and `BIND_ADDR` as needed. Frontend-only development can use `npm run dev --prefix web`; this is not required for normal use.
+
+## Design
+
+- [Architecture and recovery](docs/design/bridge-design.md)
+- [Engineering and startup requirements](docs/design/engineering-contract.md)
+- [Publishing destination catalog](docs/design/connector-package-plan.md)
+
+The design documents describe the target, not current connector coverage. No live social publishing has been performed.
