@@ -209,3 +209,7 @@ Each slice is a focused PR with visual and behavioral checks, no unrelated resty
 ## UI copy rule
 
 Across every screen, include only labels, meaningful status, and concise help necessary for a decision or recovery. Omit slogans, design rationale, implementation commentary, obvious explanations and redundant footers. Keep technical/design discussion in this document. Prototypes follow the same rule: no preview banners or disclaimer furniture. Document artifact limitations in the README and delivery message. Group destinations under prominent platform headings, with account identities below.
+
+## Appearance
+
+Dark is the initial default, using the original slate background (#11151b), sidebar (#151a21), pale text (#e1e6ed) and green accent (#c0e7ae). Light remains an explicit option. A labelled theme switch persists the choice across routes and reloads, applying before first paint. Theme changes affect appearance only, with no page reload or data refetch.

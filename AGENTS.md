@@ -19,3 +19,4 @@
 - Information architecture: operational activity, events, logs and troubleshooting belong in primary operational navigation or the relevant resource detail, never under Settings. Settings contains configuration. Apply established conventions before presenting designs; do not wait for the user to identify basic hierarchy mistakes.
 - Events are user operations, each shown once with consistent agent, destination and outcome fields. Expand an operation for its steps, errors and retries; never flatten mixed component logs into the main event list.
 - Tasks presents work state, results and recovery. Activity log presents operation history and diagnostic steps. Link from a task to the log filtered by task ID; do not duplicate the log as a task tab.
+- Preserve the original AgentWay dark palette (slate surfaces and pale green accent). Offer light/dark selection with a persisted preference; do not replace the established theme during unrelated design work.
