@@ -241,8 +241,11 @@ async fn list(State(p): State<Publisher>) -> Api<Vec<Publication>> {
 async fn retry(State(p): State<Publisher>, Path(id): Path<String>) -> Api<Publication> {
     Ok(Json(p.retry(&id).await?))
 }
-async fn publication(State(p): State<Publisher>, Path(id): Path<String>) -> Api<Publication> {
-    Ok(Json(p.publication(&id).await?))
+async fn publication(
+    State(p): State<Publisher>,
+    Path(id): Path<String>,
+) -> Api<PublicationVerification> {
+    Ok(Json(p.verified_publication(&id).await?))
 }
 async fn create_media(State(p): State<Publisher>, Json(input): Json<MediaInput>) -> Api<Value> {
     Ok(Json(p.create_media(input).await?))

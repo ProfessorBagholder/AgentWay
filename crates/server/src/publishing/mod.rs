@@ -39,6 +39,7 @@ struct Endpoints {
     token: String,
     channels: String,
     upload: String,
+    videos: String,
 }
 impl Default for Endpoints {
     fn default() -> Self {
@@ -46,6 +47,7 @@ impl Default for Endpoints {
             token: "https://oauth2.googleapis.com/token".into(),
             channels: "https://www.googleapis.com/youtube/v3/channels".into(),
             upload: "https://www.googleapis.com/upload/youtube/v3/videos".into(),
+            videos: "https://www.googleapis.com/youtube/v3/videos".into(),
         }
     }
 }
@@ -60,6 +62,14 @@ pub struct Publication {
     pub error: Option<String>,
     pub created_at: String,
     pub revision: i64,
+}
+#[derive(Debug, Serialize)]
+pub struct PublicationVerification {
+    #[serde(flatten)]
+    publication: Publication,
+    requested_privacy: String,
+    actual_privacy: Option<String>,
+    visibility_error: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -189,6 +199,51 @@ impl Publisher {
             .bind(id)
             .fetch_one(&self.0.db)
             .await?)
+    }
+    pub async fn verified_publication(&self, id: &str) -> Result<PublicationVerification> {
+        let publication = self.publication(id).await?;
+        let (input, channel, video): (String, String, Option<String>) =
+            sqlx::query_as("SELECT input,channel_id,video_id FROM publications WHERE id=?")
+                .bind(id)
+                .fetch_one(&self.0.db)
+                .await?;
+        let input: PublishInput = serde_json::from_str(&input)?;
+        let mut result = PublicationVerification {
+            publication,
+            requested_privacy: input.privacy,
+            actual_privacy: None,
+            visibility_error: None,
+        };
+        if let Some(video) = video {
+            match self.video_privacy(&channel, &video).await {
+                Ok(privacy) => result.actual_privacy = Some(privacy),
+                Err(_) => result.visibility_error = Some(
+                    "Could not verify current YouTube visibility. Upload remains complete; retry this status check, not the upload.".into()),
+            }
+        }
+        Ok(result)
+    }
+    async fn video_privacy(&self, channel: &str, video: &str) -> Result<String> {
+        let token = self.access_token(channel).await?;
+        let response = self
+            .0
+            .client
+            .get(&self.0.endpoints.videos)
+            .query(&[("part", "status"), ("id", video)])
+            .bearer_auth(token)
+            .send()
+            .await?;
+        if response.status().as_u16() == 401 {
+            *self.0.access_token.lock().await = None;
+        }
+        let body: Value = response.error_for_status()?.json().await?;
+        body["items"]
+            .as_array()
+            .and_then(|items| items.iter().find(|item| item["id"].as_str() == Some(video)))
+            .and_then(|item| item["status"]["privacyStatus"].as_str())
+            .filter(|privacy| ["private", "unlisted", "public"].contains(privacy))
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("YouTube did not return visibility"))
     }
     async fn emit(&self, kind: &str, value: Value) -> Result<()> {
         sqlx::query("INSERT INTO events(kind,payload) VALUES(?,?)")

@@ -49,7 +49,7 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "Upload finished media to the connected YouTube channel. Requires a completed media PUT. Returns a persisted job; use get_publication until uploaded or interrupted. Reuse request_id on retries. Do not claim published until a video_url is returned. YouTube still processes uploaded videos, and determines Shorts classification."
+        description = "Upload finished media to the connected YouTube channel. Requires a completed media PUT. Returns a persisted job; use get_publication until uploaded or interrupted. Reuse request_id on retries. A video_url confirms upload only. Use get_publication and confirm actual_privacy matches requested_privacy before claiming the requested visibility. YouTube still processes uploaded videos, and determines Shorts classification."
     )]
     async fn publish_youtube(
         &self,
@@ -63,14 +63,14 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "Read one upload's saved progress, error or final YouTube URL. Poll only while queued or uploading, no more often than every five seconds."
+        description = "Read one upload's saved progress and URL, plus current YouTube actual_privacy and requested_privacy. Null actual_privacy means unverified; visibility_error does not mean upload failure. Never re-upload to retry visibility verification. Poll only while queued or uploading, no more often than every five seconds."
     )]
     async fn get_publication(
         &self,
         Parameters(input): Parameters<UploadId>,
     ) -> Result<rmcp::Json<Value>, String> {
         self.publisher
-            .publication(&input.id)
+            .verified_publication(&input.id)
             .await
             .and_then(|v| Ok(serde_json::to_value(v)?))
             .map(rmcp::Json)

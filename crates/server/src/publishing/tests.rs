@@ -240,6 +240,7 @@ async fn restart_recovers_lost_final_response_without_duplicate_upload() {
         token: format!("{base}/token"),
         channels: format!("{base}/channels"),
         upload: format!("{base}/upload/youtube/v3/videos"),
+        videos: format!("{base}/videos"),
     };
     account(&p).await;
     let job = p.enqueue(input(media(&p).await)).await.unwrap();
@@ -271,6 +272,7 @@ async fn restart_recovers_lost_final_response_without_duplicate_upload() {
         token: format!("{base}/token"),
         channels: format!("{base}/channels"),
         upload: format!("{base}/upload/youtube/v3/videos"),
+        videos: format!("{base}/videos"),
     };
     p.retry(&job.id).await.unwrap();
     let worker = p.start_worker();
@@ -380,4 +382,75 @@ async fn mcp_json(response: reqwest::Response) -> Value {
         }
     }
     panic!("No MCP response: {buffered}");
+}
+
+#[tokio::test]
+async fn agent_status_verifies_visibility_without_reuploading() {
+    let (_dir, mut p) = fixture().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let mode = Arc::new(AtomicUsize::new(0));
+    let mock = Router::new()
+        .route("/token", post(|| async { Json(json!({"access_token":"access","token_type":"Bearer","expires_in":3600})) }))
+        .route("/videos", axum::routing::get({
+            let mode = mode.clone();
+            move |headers: axum::http::HeaderMap, axum::extract::Query(query): axum::extract::Query<std::collections::HashMap<String,String>>| {
+                let mode = mode.load(Ordering::SeqCst);
+                async move {
+                    assert_eq!(headers["authorization"], "Bearer access");
+                    assert_eq!(query["part"], "status");
+                    assert_eq!(query["id"], "test_video");
+                    match mode {
+                        0 => Json(json!({"items":[{"id":"test_video","status":{"privacyStatus":"private"}}]})).into_response(),
+                        1 => Json(json!({"items":[{"id":"test_video","status":{"privacyStatus":"public"}}]})).into_response(),
+                        2 => Json(json!({"items":[]})).into_response(),
+                        _ => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+                    }
+                }
+            }
+        }));
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    Arc::get_mut(&mut p.0).unwrap().endpoints.token = format!("{base}/token");
+    Arc::get_mut(&mut p.0).unwrap().endpoints.videos = format!("{base}/videos");
+    account(&p).await;
+    p.set("private_only", "false").await.unwrap();
+    let mut request = input(media(&p).await);
+    request.privacy = "public".into();
+    let job = p.enqueue(request).await.unwrap();
+    assert!(
+        p.verified_publication(&job.id)
+            .await
+            .unwrap()
+            .actual_privacy
+            .is_none()
+    );
+    sqlx::query("UPDATE publications SET status='uploaded',video_id='test_video',video_url='https://www.youtube.com/watch?v=test_video' WHERE id=?")
+        .bind(&job.id).execute(&p.0.db).await.unwrap();
+    for (state, expected) in [
+        (0, Some("private")),
+        (1, Some("public")),
+        (2, None),
+        (3, None),
+    ] {
+        mode.store(state, Ordering::SeqCst);
+        let (status, result) = call(
+            &p,
+            "GET",
+            &format!("/v1/publications/{}", job.id),
+            vec![],
+            true,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(result["requested_privacy"], "public");
+        assert_eq!(result["actual_privacy"].as_str(), expected);
+        assert_eq!(result["status"], "uploaded");
+        assert_eq!(result["visibility_error"].is_null(), expected.is_some());
+    }
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM publications")
+        .fetch_one(&p.0.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    server.abort();
 }

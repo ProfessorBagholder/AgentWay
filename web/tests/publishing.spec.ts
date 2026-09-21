@@ -17,6 +17,12 @@ test("publishing loads real account state and keeps navigation and credentials l
   await expect(page.getByLabel("Agent connection instructions")).toHaveValue(
     /POST \/v1\/youtube\/publish/,
   );
+  await expect(page.getByLabel("Agent connection instructions")).toHaveValue(
+    /private, unlisted, or public/,
+  );
+  await expect(page.getByLabel("Agent connection instructions")).toHaveValue(
+    /compare actual_privacy with requested_privacy/,
+  );
   const documents: string[] = [];
   page.on("request", (r) => {
     if (r.isNavigationRequest()) documents.push(r.url());

@@ -61,3 +61,13 @@ Automated tests cover auth boundaries, incomplete media, policy enforcement, con
 - https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse
 - https://www.meta.com/help/artificial-intelligence/1687253048996149/
 - https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/
+
+## Verify requested visibility
+
+Public and unlisted uploads are supported when the owner disables **Only allow private uploads**. Agents must read `/v1/status` first, use the visibility requested by the user (private when unspecified), and use a new request ID for each new upload. Retries retain the original ID and identical arguments.
+
+After upload, `GET /v1/publications/{id}` and MCP `get_publication` return `requested_privacy`, `actual_privacy`, and `visibility_error` alongside existing publication fields. Each status check for a completed video reads its current visibility from YouTube, so manual Studio changes are reflected. A public request is verified only when `actual_privacy` is `public`; a URL or `uploaded` alone is insufficient. A mismatch must be reported to the user.
+
+If YouTube cannot be queried or returns no usable visibility, `actual_privacy` is null and `visibility_error` explains that verification failed. Upload state remains complete. Retry the status check, not the upload. Queued jobs have null actual visibility without a verification error. Status queries do not establish processing completion or Shorts classification.
+
+Mock-provider coverage verifies public requests resulting in private or public visibility, missing videos, provider failures, and preservation of completed uploads. A live authenticated status check against the existing test upload returned requested_privacy=private, actual_privacy=public, and visibility_error=null, confirming the user's manual Studio change. Uploading with public visibility from the outset remains untested.
