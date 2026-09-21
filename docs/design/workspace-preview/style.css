@@ -867,3 +867,26 @@ th {
     justify-self: start;
   }
 }
+
+.agent-table th {
+  background: var(--surface);
+  padding: 14px 24px;
+}
+.agent-table td {
+  padding: 22px 24px;
+}
+.agent-table td:first-child {
+  width: 55%;
+}
+.agent-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.agent-table td a {
+  color: var(--text);
+}
+@media (max-width: 620px) {
+  .agent-table th,
+  .agent-table td {
+    padding: 16px;
+  }
+}

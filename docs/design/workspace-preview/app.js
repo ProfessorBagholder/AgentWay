@@ -75,10 +75,20 @@ function notice(s) {
     5000,
   );
 }
+function agentLabel(product) {
+  return (
+    {
+      Muse: "Muse",
+      "Claude agents": "Claude",
+      "ChatGPT agents": "ChatGPT",
+      "Grok Bot": "Grok",
+    }[product] || product
+  );
+}
 function agentList() {
   return (
     heading("Agents", "", link("agents/connect", "Connect agent", true)) +
-    `<section class="panel" aria-label="Agent connections"><div class="row head"><span>Agent</span><span>Connection</span><span>Allowance</span><span></span></div>${agents.map((a) => `<div class="row"><div><a href="#/agents/${a.id}"><strong>${escape(a.name)}</strong></a><span class="sub">${a.product} · ${a.account}</span></div><div>${badge(a.state)}<span class="sub">${a.delivery}</span></div><div>${a.capacity}<span class="sub">${a.account === "Podcast workspace" ? "Shared by 2 agents" : "No estimate available"}</span></div><a aria-label="Manage ${escape(a.name)}" href="#/agents/${a.id}">→</a></div>`).join("")}</section>`
+    `<section class="panel"><table class="agent-table" aria-label="Agent connections"><thead><tr><th scope="col">Agent</th><th scope="col">Connection</th></tr></thead><tbody>${agents.map((a) => `<tr><td><a href="#/agents/${a.id}"><strong>${escape(agentLabel(a.product))}</strong></a></td><td>${badge(a.state)}</td></tr>`).join("")}</tbody></table></section>`
   );
 }
 function agentDetail(id) {
@@ -87,7 +97,7 @@ function agentDetail(id) {
   return (
     back("agents", "Agents") +
     heading(escape(a.name), `${a.product} · ${a.account}`, badge(a.state)) +
-    `<div class="grid"><div><section class="panel"><div class="panel-title"><h2>Connection</h2></div><div class="pad">${kv("Access", a.state)}${kv("Task delivery", a.delivery)}<div class="actions"><button data-action="toggle" data-id="${id}">${a.state === "Paused" ? "Resume access" : "Pause access"}</button>${link("agents/connect", "Reconnect")}</div></div></section><section class="panel"><div class="panel-title"><h2>Permissions</h2></div><div class="pad"><label class="check"><input type="checkbox" id="publish" ${a.access ? "checked" : ""}> Publish to Professor Bagholder · YouTube</label><label class="check"><input type="checkbox" id="delegate" ${(a.delegate ?? id === "muse") ? "checked" : ""}> Delegate work to Episode editor and Clip writer</label><button data-action="save-access" data-id="${id}">Save permissions</button></div></section></div><div><section class="panel"><div class="panel-title"><h2>Allowance</h2></div><div class="pad"><h3>${a.capacity}</h3>${kv("Account", a.account)}${kv("On a reported limit", "Pause assignment; preserve checkpoint")}</div></section><section class="panel"><div class="pad"><h2>Activity</h2><p>${id === "muse" ? "Requested publication of Episode 12 teaser." : "No tasks yet."}</p>${id === "muse" ? link("tasks/episode", "View task") : ""}</div></section></div></div>`
+    `<div class="grid"><div><section class="panel"><div class="panel-title"><h2>Connection</h2></div><div class="pad">${kv("Access", a.state)}${kv("Task delivery", a.delivery)}<div class="actions"><button data-action="toggle" data-id="${id}">${a.state === "Paused" ? "Resume access" : "Pause access"}</button>${link("agents/connect", "Reconnect")}</div></div></section><section class="panel"><div class="panel-title"><h2>Permissions</h2></div><div class="pad"><label class="check"><input type="checkbox" id="publish" ${a.access ? "checked" : ""}> Publish to Professor Bagholder · YouTube</label><label class="check"><input type="checkbox" id="delegate" ${(a.delegate ?? id === "muse") ? "checked" : ""}> Delegate work to Episode editor and Clip writer</label><button data-action="save-access" data-id="${id}">Save permissions</button></div></section></div><div><section class="panel"><div class="panel-title"><h2>Usage limits</h2></div><div class="pad"><h3>${a.capacity}</h3>${kv("Account", a.account)}${kv("On a reported limit", "Pause assignment; preserve checkpoint")}</div></section><section class="panel"><div class="pad"><h2>Activity</h2><p>${id === "muse" ? "Requested publication of Episode 12 teaser." : "No tasks yet."}</p>${id === "muse" ? link("tasks/episode", "View task") : ""}</div></section></div></div>`
   );
 }
 function connect() {
