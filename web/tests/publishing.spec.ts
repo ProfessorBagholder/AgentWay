@@ -11,6 +11,9 @@ test("publishing loads real account state and keeps navigation and credentials l
     page.getByRole("heading", { name: "Agent connection", exact: true }),
   ).toBeVisible();
   await expect(page.getByLabel("Only allow private uploads")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Uploads", exact: true }),
+  ).toHaveCount(0);
   await page
     .getByText("Connection instructions and token", { exact: true })
     .click();

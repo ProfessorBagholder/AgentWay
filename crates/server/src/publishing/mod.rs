@@ -63,6 +63,12 @@ pub struct Publication {
     pub created_at: String,
     pub revision: i64,
 }
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct BridgeActivity {
+    pub last_seen: String,
+    pub operation: String,
+    pub revision: i64,
+}
 #[derive(Debug, Serialize)]
 pub struct PublicationVerification {
     #[serde(flatten)]
@@ -186,6 +192,25 @@ impl Publisher {
         Ok(
             json!({"configured": self.setting("client_id").await?.is_some(), "account": account.map(|(id,name)| json!({"id":id,"name":name})), "private_only": self.setting("private_only").await?.as_deref() != Some("false"), "bridge_url":self.setting("bridge_url").await?.unwrap_or_default()}),
         )
+    }
+    pub async fn activity(&self) -> Result<Option<BridgeActivity>> {
+        Ok(
+            sqlx::query_as("SELECT last_seen,operation,revision FROM bridge_activity WHERE id=1")
+                .fetch_optional(&self.0.db)
+                .await?,
+        )
+    }
+    async fn record_activity(&self, operation: &str) -> Result<()> {
+        let mut tx = self.0.db.begin().await?;
+        let activity: BridgeActivity = sqlx::query_as(
+            "INSERT INTO bridge_activity(id,last_seen,operation) VALUES(1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),?) ON CONFLICT(id) DO UPDATE SET last_seen=excluded.last_seen,operation=excluded.operation,revision=bridge_activity.revision+1 RETURNING last_seen,operation,revision")
+            .bind(operation).fetch_one(&mut *tx).await?;
+        sqlx::query("INSERT INTO events(kind,payload) VALUES('bridge.activity',?)")
+            .bind(serde_json::to_string(&activity)?)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
     }
     pub async fn list(&self) -> Result<Vec<Publication>> {
         Ok(

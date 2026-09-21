@@ -3,7 +3,9 @@
 ## Implemented and locally tested
 
 - Async Rust/Axum server, SQLx/SQLite migrations and persistent event replay.
-- Existing saved agent records and task cancellation; these do not execute agents.
+- Agents shows the owner-named publishing connection and timestamped authenticated bridge activity. Shared credentials cannot distinguish individual clients or expose external agent work.
+- Tasks shows real publishing jobs, progress, errors, retries and YouTube links. Legacy saved agent/task records remain stored but are no longer presented as live activity.
+- Navigation uses tab-specific hashes and restores tabs on refresh and browser history. Publishing contains connection/settings controls; upload jobs appear only in Tasks.
 - Publishing: Google OAuth with PKCE and browser-bound single-use state, encrypted credentials, connected channel identification, private-only owner policy, token rotation, media transfer, resumable YouTube upload queue and saved results.
 - Agent publication status reads current YouTube visibility and reports requested versus actual privacy; verification errors preserve completed uploads. Covered with mock-provider tests.
 - Separate authenticated HTTP/MCP agent listener; management and credentials remain loopback-only.
@@ -12,7 +14,7 @@
 
 ## Live validation
 
-The user completed the Muse → AgentWay → YouTube flow: Google consent, channel discovery, authenticated Muse connection, media transfer and video upload. The user confirmed playback and Private visibility with a YouTube screenshot. The user subsequently changed that video to public in Studio; the new authenticated visibility check read requested_privacy=private and actual_privacy=public from the live account. Public-from-outset upload remains untested. This validates the HTTP connector path with Muse; the MCP path has automated protocol coverage, not a separate live agent test. See [setup and verification](youtube-publishing.md).
+The user completed the Muse → AgentWay → YouTube flow: Google consent, channel discovery, authenticated Muse connection, media transfer and video upload. The user confirmed playback and Private visibility with a YouTube screenshot. The user subsequently changed that video to public in Studio; the new authenticated visibility check read requested_privacy=private and actual_privacy=public from the live account. The user subsequently confirmed Muse successfully uploaded a public video from the outset. This validates the HTTP connector path with Muse; the MCP path has automated protocol coverage, not a separate live agent test. See [setup and verification](youtube-publishing.md).
 
 ## Not implemented
 

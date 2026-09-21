@@ -61,6 +61,10 @@ impl Publisher {
             .route("/api/publishing/token", post(token))
             .route("/api/publishing/token/rotate", post(rotate))
             .route("/api/publications", get(list))
+            .route(
+                "/api/publishing/connection",
+                get(connection).post(name_connection),
+            )
             .route("/api/publications/{id}/retry", post(retry))
             .layer(DefaultBodyLimit::max(64 * 1024))
             .with_state(self.clone())
@@ -109,11 +113,53 @@ async fn authenticate(State(p): State<Publisher>, req: Request, next: Next) -> R
         )
             .into_response();
     }
+    // Record only known authenticated bridge operations, never tokens, query strings,
+    // media bytes or client-supplied names. A shared token cannot identify an agent.
+    let path = req.uri().path();
+    let operation = match (req.method().as_str(), path) {
+        ("GET", "/v1/status") => Some("Checked connection"),
+        ("POST", "/v1/media") => Some("Reserved video upload"),
+        ("PUT", p) if p.starts_with("/v1/media/") => Some("Transferred video"),
+        ("DELETE", p) if p.starts_with("/v1/media/") => Some("Removed staged video"),
+        ("POST", "/v1/youtube/publish") => Some("Requested YouTube upload"),
+        ("GET", p) if p.starts_with("/v1/publications/") => Some("Checked upload status"),
+        ("POST", p) if p.starts_with("/v1/publications/") && p.ends_with("/retry") => {
+            Some("Requested upload retry")
+        }
+        (_, "/mcp") => Some("MCP request"),
+        _ => None,
+    };
+    if let Some(operation) = operation
+        && p.record_activity(operation).await.is_err()
+    {
+        tracing::warn!("Could not record authenticated bridge activity");
+    }
     let mut response = next.run(req).await;
     response
         .headers_mut()
         .insert("cache-control", "no-store".parse().unwrap());
     response
+}
+async fn connection(State(p): State<Publisher>) -> Api<Value> {
+    Ok(Json(
+        json!({"name":p.setting("agent_connection_name").await?.unwrap_or_else(|| "Publishing connection".into()), "activity": p.activity().await?}),
+    ))
+}
+#[derive(Deserialize)]
+struct ConnectionName {
+    name: String,
+}
+async fn name_connection(
+    State(p): State<Publisher>,
+    Json(input): Json<ConnectionName>,
+) -> Api<Value> {
+    let name = input.name.trim();
+    if name.is_empty() || name.chars().count() > 80 {
+        return Err(anyhow::anyhow!("Connection name must contain 1–80 characters").into());
+    }
+    p.set("agent_connection_name", name).await?;
+    p.emit("bridge.name", json!({"name":name})).await?;
+    connection(State(p)).await
 }
 async fn status(State(p): State<Publisher>) -> Api<Value> {
     Ok(Json(p.status().await?))

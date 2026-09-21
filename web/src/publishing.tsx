@@ -32,18 +32,6 @@ export function Publishing() {
     queryKey: ["youtube"],
     queryFn: () => request<YoutubeStatus>("/api/youtube"),
   });
-  const uploads = useQuery({
-    queryKey: ["publications-loaded"],
-    queryFn: async () => {
-      const rows = await request<Publication[]>("/api/publications");
-      rows.forEach(upsertPublication);
-      return true;
-    },
-  });
-  const ids = useQuery<string[]>({
-    queryKey: ["publications"],
-    enabled: false,
-  });
   const connect = useMutation({
     mutationFn: () => request<{ url: string }>("/api/youtube/connect", {}),
     onSuccess: ({ url }) => {
@@ -135,27 +123,6 @@ export function Publishing() {
           ))}
       </section>
       <AgentAccess status={s} />
-      <section className="panel" aria-labelledby="uploads-heading">
-        <div className="publishing-section">
-          <h2 id="uploads-heading">Uploads</h2>
-        </div>
-        {uploads.error ? (
-          <p role="alert" className="error">
-            {uploads.error.message}
-          </p>
-        ) : !ids.data?.length ? (
-          <div className="empty">
-            <h2>No uploads</h2>
-            <p>Videos submitted by your agent will appear here.</p>
-          </div>
-        ) : (
-          <div className="rows">
-            {ids.data.map((id) => (
-              <UploadRow key={id} id={id} />
-            ))}
-          </div>
-        )}
-      </section>
     </div>
   );
 }
@@ -331,7 +298,7 @@ function AgentAccess({ status }: { status: YoutubeStatus }) {
     </section>
   );
 }
-function UploadRow({ id }: { id: string }) {
+export function UploadRow({ id }: { id: string }) {
   const { data: p } = useQuery<Publication>({
     queryKey: ["publication", id],
     enabled: false,

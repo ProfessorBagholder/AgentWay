@@ -70,4 +70,8 @@ After upload, `GET /v1/publications/{id}` and MCP `get_publication` return `requ
 
 If YouTube cannot be queried or returns no usable visibility, `actual_privacy` is null and `visibility_error` explains that verification failed. Upload state remains complete. Retry the status check, not the upload. Queued jobs have null actual visibility without a verification error. Status queries do not establish processing completion or Shorts classification.
 
-Mock-provider coverage verifies public requests resulting in private or public visibility, missing videos, provider failures, and preservation of completed uploads. A live authenticated status check against the existing test upload returned requested_privacy=private, actual_privacy=public, and visibility_error=null, confirming the user's manual Studio change. Uploading with public visibility from the outset remains untested.
+Mock-provider coverage verifies public requests resulting in private or public visibility, missing videos, provider failures, and preservation of completed uploads. A live authenticated status check against the existing test upload returned requested_privacy=private, actual_privacy=public, and visibility_error=null, confirming the user's manual Studio change. The user subsequently confirmed a successful Muse upload with public visibility requested from the outset.
+
+## Agents and Tasks
+
+Agents shows the existing publishing connection, with an owner-assigned name and last authenticated bridge request. It does not infer client identity from the shared token or claim that the agent is online. Tracking begins when this version is installed; historical request timestamps are not fabricated. Tasks lists actual publication jobs, updated through per-record SSE events. Legacy saved agent/task rows are preserved in storage but hidden from these operational screens. Browser tests use fixtures and synthetic events and no longer insert placeholder records into a running user's database.

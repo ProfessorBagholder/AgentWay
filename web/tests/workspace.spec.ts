@@ -1,58 +1,133 @@
 import { test, expect } from "@playwright/test";
-test("saves an agent and task, updates a second window without reloading or refetching unrelated resources", async ({
+
+// Browser tests use fixtures and synthetic SSE, never create records in the user's database.
+test.beforeEach(async ({ page }) => {
+  await page.route("**/api/bootstrap", (route) =>
+    route.fulfill({
+      json: {
+        agents: [{ id: "old", name: "Old placeholder" }],
+        tasks: [],
+        cursor: 0,
+      },
+    }),
+  );
+  await page.route("**/api/publishing/connection", (route) =>
+    route.fulfill({ json: { name: "Muse", activity: null } }),
+  );
+  await page.route("**/api/publications", (route) =>
+    route.fulfill({
+      json: [
+        {
+          id: "upload",
+          title: "Podcast teaser",
+          status: "uploaded",
+          uploaded_bytes: 4,
+          total_bytes: 4,
+          video_url: "https://www.youtube.com/watch?v=test",
+          error: null,
+          created_at: "2026-09-21T12:00:00Z",
+          revision: 1,
+        },
+      ],
+    }),
+  );
+  await page.addInitScript(() => {
+    class MockEvents extends EventTarget {
+      onopen: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor() {
+        super();
+        (window as any).testEvents = this;
+      }
+      close() {}
+    }
+    (window as any).EventSource = MockEvents;
+  });
+});
+
+test("shows real publication records and updates individual rows from events", async ({
   page,
-  context,
 }) => {
   await page.goto("/");
+  await expect(page.getByText("Muse", { exact: true })).toBeVisible();
+  await expect(page.getByText("Old placeholder")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Add agent", exact: true }),
-  ).toBeEnabled();
-  const other = await context.newPage();
-  await other.goto("/");
+  ).toHaveCount(0);
+  await page.evaluate(() =>
+    (window as any).testEvents.dispatchEvent(
+      new MessageEvent("bridge.activity", {
+        data: JSON.stringify({
+          last_seen: "2026-09-21T12:00:00Z",
+          operation: "Requested YouTube upload",
+          revision: 1,
+        }),
+      }),
+    ),
+  );
   await expect(
-    other.getByRole("button", { name: "Add agent", exact: true }),
-  ).toBeEnabled();
+    page.getByText("Requested YouTube upload", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Tasks", exact: true }).click();
+  await expect(page.getByText("Podcast teaser", { exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Save task", exact: true }),
+  ).toHaveCount(0);
   const reads: string[] = [];
   const documents: string[] = [];
-  other.on("request", (r) => {
-    if (
-      r.method() === "GET" &&
-      r.url().includes("/api/") &&
-      !r.url().includes("/api/events")
-    )
-      reads.push(r.url());
+  page.on("request", (r) => {
+    if (r.url().includes("/api/")) reads.push(r.url());
     if (r.isNavigationRequest()) documents.push(r.url());
   });
-  const name = `Coordinator ${Date.now()}`;
-  await page.getByRole("button", { name: "Add agent", exact: true }).click();
-  await page.getByLabel("Agent name").fill(name);
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Add agent", exact: true })
-    .click();
-  await expect(other.getByText(name, { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Tasks", exact: true }).click();
-  await other.getByRole("button", { name: "Tasks", exact: true }).click();
-  await page.getByRole("button", { name: "Save task", exact: true }).click();
-  const title = `Captions ${Date.now()}`;
-  await page.getByLabel("Title", { exact: true }).fill(title);
-  await page.getByLabel("Assign to").selectOption({ label: name });
-  await page.getByLabel("Instructions").fill("Create three short captions.");
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Save task" })
-    .click();
-  await expect(other.getByText(title, { exact: true })).toBeVisible();
-  await other.getByRole("button", { name: "Tasks", exact: true }).click();
-  await page
-    .getByRole("button", { name: `Cancel ${title}`, exact: true })
-    .click();
+  await page.evaluate(() =>
+    (window as any).testEvents.dispatchEvent(
+      new MessageEvent("publication.upsert", {
+        data: JSON.stringify({
+          id: "upload",
+          title: "Podcast teaser",
+          status: "interrupted",
+          uploaded_bytes: 2,
+          total_bytes: 4,
+          video_url: null,
+          error: "Connection interrupted",
+          created_at: "2026-09-21T12:00:00Z",
+          revision: 2,
+        }),
+      }),
+    ),
+  );
   await expect(
-    other
-      .locator(".task-row")
-      .filter({ hasText: title })
-      .getByText("cancelled", { exact: true }),
+    page.getByText("Connection interrupted", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Retry upload" }),
   ).toBeVisible();
   expect(reads).toEqual([]);
   expect(documents).toEqual([]);
+});
+
+test("tab URLs survive refresh and browser history", async ({ page }) => {
+  await page.goto("/#agents");
+  await page.getByRole("button", { name: "Tasks", exact: true }).click();
+  await expect(page).toHaveURL(/#tasks$/);
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Tasks", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Publishing", exact: true }).click();
+  await expect(page).toHaveURL(/#publishing$/);
+  await page.goBack();
+  await expect(
+    page.getByRole("heading", { name: "Tasks", exact: true }),
+  ).toBeVisible();
+  await page.goForward();
+  await expect(
+    page.getByRole("heading", { name: "Publishing", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("link", { name: "AgentWay", exact: true }).click();
+  await expect(page).toHaveURL(/#agents$/);
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Agents", exact: true }),
+  ).toBeVisible();
 });

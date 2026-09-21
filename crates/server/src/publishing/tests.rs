@@ -454,3 +454,27 @@ async fn agent_status_verifies_visibility_without_reuploading() {
     assert_eq!(count, 1);
     server.abort();
 }
+
+#[tokio::test]
+async fn activity_tracks_authenticated_requests_and_persists_events() {
+    let (_dir, p) = fixture().await;
+    assert!(p.activity().await.unwrap().is_none());
+    call(&p, "GET", "/v1/status", vec![], false).await;
+    assert!(p.activity().await.unwrap().is_none());
+    call(&p, "GET", "/v1/status", vec![], true).await;
+    let first = p.activity().await.unwrap().unwrap();
+    assert_eq!(first.operation, "Checked connection");
+    assert!(!first.last_seen.is_empty());
+    call(&p, "GET", "/v1/status", vec![], true).await;
+    let next = p.activity().await.unwrap().unwrap();
+    assert_eq!(next.revision, first.revision + 1);
+    let payload: String = sqlx::query_scalar(
+        "SELECT payload FROM events WHERE kind='bridge.activity' ORDER BY sequence DESC LIMIT 1",
+    )
+    .fetch_one(&p.0.db)
+    .await
+    .unwrap();
+    let event: BridgeActivity = serde_json::from_str(&payload).unwrap();
+    assert_eq!(event.revision, next.revision);
+    assert!(!payload.contains(&p.secret("agent_token").await.unwrap()));
+}
