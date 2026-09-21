@@ -547,7 +547,7 @@ th {
   content: "▸";
   color: #6b7180;
 }
-.event-list details[open] summary::before {
+.event-list details[open] > summary::before {
   content: "▾";
 }
 .event-title {
@@ -584,5 +584,68 @@ th {
   nav {
     flex-wrap: wrap;
     gap: 4px;
+  }
+}
+
+.event-context {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  width: 100%;
+  padding-left: 28px;
+  font-size: 13px;
+  font-weight: 400;
+}
+.event-context > span {
+  overflow-wrap: anywhere;
+}
+.field-name {
+  display: block;
+  font-size: 12px;
+  color: #686e7d;
+  margin-bottom: 3px;
+}
+.operation-body {
+  margin-top: 22px;
+}
+.operation-meta {
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  color: #686e7d;
+  font-size: 12px;
+  margin-bottom: 18px;
+}
+.operation-steps {
+  margin: 0;
+  padding-left: 24px;
+  border-top: 1px solid #ececf1;
+}
+.operation-steps > li {
+  border-bottom: 1px solid #ececf1;
+}
+.event-list .step {
+  padding: 16px 0;
+  border-top: 0;
+}
+.step-error {
+  margin: 12px 0 0;
+  color: #9c3030;
+  font-size: 13px;
+}
+@media (max-width: 800px) {
+  .event-context {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .event-context > span {
+    display: flex;
+    gap: 12px;
+  }
+  .field-name {
+    min-width: 80px;
+  }
+  .operation .event-time {
+    width: auto;
   }
 }

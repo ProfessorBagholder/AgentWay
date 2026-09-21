@@ -346,17 +346,39 @@ function taskEvents(id) {
       : []),
   ];
 }
+function operationEvents(id) {
+  const operations = [
+    {
+      id: "publish-episode-12",
+      task: "episode",
+      action: "Publish video",
+      subject: "Episode 12 teaser",
+      agent: "Podcast coordinator · Muse",
+      destination: "Professor Bagholder · YouTube",
+      status: retryDone ? "Complete" : "Needs attention",
+      steps: taskEvents("episode"),
+    },
+    {
+      id: "check-connection-21",
+      task: null,
+      action: "Check connection",
+      subject: "Market research",
+      agent: "Market research · Grok Bot",
+      destination: "AgentWay",
+      status: "Failed",
+      steps: connectionEvents,
+    },
+  ];
+  return id ? operations.filter((o) => o.task === id) : operations;
+}
 function eventView(id) {
   const params = new URLSearchParams(location.hash.split("?")[1] || "");
   const errors = params.get("level") === "error";
-  const all = id
-    ? taskEvents(id)
-    : [...taskEvents("episode"), ...connectionEvents].sort((a, b) =>
-        a.time.localeCompare(b.time),
-      );
-  const events = all.filter((e) => !errors || e.level === "error");
+  const operations = operationEvents(id).filter(
+    (o) => !errors || o.steps.some((s) => s.level === "error"),
+  );
   const route = id ? `tasks/${id}/events` : "events";
-  return `<div class="split event-controls"><div class="toolbar"><a class="${!errors ? "selected" : ""}" href="#/${route}">All events</a><a class="${errors ? "selected" : ""}" href="#/${route}?level=error">Errors</a></div><button data-action="export-events" data-task="${id || ""}">Export diagnostics</button></div><section class="panel event-list">${events.length ? events.map((e) => `<details ${e.level === "error" ? "open" : ""}><summary><span class="event-time">${escape(e.time.replace("T", " ").replace("Z", " UTC"))}</span><span class="event-title">${escape(e.title)}<span class="sub">${escape(e.source)} · ${escape(e.id)}</span></span><span class="badge ${e.level === "error" ? "error" : ""}">${e.level === "error" ? "Error" : "Info"}</span></summary><pre>${escape(JSON.stringify(e.details, null, 2))}</pre></details>`).join("") : '<div class="pad">No events recorded.</div>'}</section>`;
+  return `<div class="split event-controls"><div class="toolbar"><a class="${!errors ? "selected" : ""}" href="#/${route}">All events</a><a class="${errors ? "selected" : ""}" href="#/${route}?level=error">With errors</a></div><button data-action="export-events" data-task="${id || ""}">Export diagnostics</button></div><section class="panel event-list">${operations.length ? operations.map((o) => `<details class="operation"><summary><span class="event-title"><strong>${escape(o.action)}</strong><span class="sub">${escape(o.subject)}</span></span><span class="badge ${o.status === "Failed" ? "error" : o.status === "Complete" ? "good" : "warn"}">${o.status}</span><span class="event-context"><span><span class="field-name">Agent</span>${escape(o.agent)}</span><span><span class="field-name">Destination</span>${escape(o.destination)}</span><span><span class="field-name">Started</span>${escape(o.steps[0].time.replace("T", " ").replace("Z", " UTC"))}</span></span></summary><div class="operation-body"><div class="operation-meta"><span>${escape(o.id)}</span>${o.task ? `<a href="#/tasks/${o.task}">View task</a>` : ""}</div><ol class="operation-steps">${o.steps.map((e) => `<li><details class="step" ${e.level === "error" ? "open" : ""}><summary><span class="event-time">${escape(e.time.slice(11, 23))} UTC</span><span class="event-title">${escape(e.title)}</span>${e.level === "error" ? '<span class="badge error">Error</span>' : ""}</summary>${e.level === "error" ? `<p class="step-error">${escape(e.details.message || e.details.code)}</p>` : ""}<pre>${escape(JSON.stringify({ component: e.source, ...e.details }, null, 2))}</pre></details></li>`).join("")}</ol></div></details>`).join("") : '<div class="pad">No events recorded.</div>'}</section>`;
 }
 function taskTabs(id, view) {
   return `<div class="toolbar"><a class="${!view ? "selected" : ""}" href="#/tasks/${id}">Progress</a>${id === "episode" ? `<a class="${view === "settings" ? "selected" : ""}" href="#/tasks/${id}/settings">Video settings</a>` : ""}<a class="${view === "events" ? "selected" : ""}" href="#/tasks/${id}/events">Events</a></div>`;
@@ -481,9 +503,7 @@ main.addEventListener("click", (e) => {
     notice(`${a.name}: ${a.state.toLowerCase()} in preview only.`);
   }
   if (b.dataset.action === "export-events") {
-    const events = b.dataset.task
-      ? taskEvents(b.dataset.task)
-      : [...taskEvents("episode"), ...connectionEvents];
+    const events = operationEvents(b.dataset.task || undefined);
     const blob = new Blob(
       [JSON.stringify({ source: "design-fixture", events }, null, 2)],
       { type: "application/json" },
