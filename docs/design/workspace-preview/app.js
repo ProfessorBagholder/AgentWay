@@ -279,7 +279,7 @@ main.addEventListener("click", (e) => {
   }
   if (b.dataset.action === "destination-demo")
     notice(
-      "In production: open provider authorization in your browser, then return to this account. No authorization is launched in the preview.",
+      "Account enrollment is unavailable in this preview.",
     );
 });
 main.addEventListener("submit", (e) => {
