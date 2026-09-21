@@ -3,24 +3,43 @@ set -euo pipefail
 cd -- "$(dirname -- "$0")"
 port=8787
 open_browser=true
+share=false
+bridge_port=8788
 while (($#)); do
   case "$1" in
     --port) [[ $# -ge 2 ]] || { echo 'Missing port' >&2; exit 2; }; port="$2"; shift 2 ;;
+    --share) share=true; shift ;;
+    --bridge-port) [[ $# -ge 2 ]] || { echo 'Missing bridge port' >&2; exit 2; }; bridge_port="$2"; shift 2 ;;
     --no-open) open_browser=false; shift ;;
-    *) echo "Usage: ./run [--port PORT] [--no-open]" >&2; exit 2 ;;
+    *) echo "Usage: ./run [--port PORT] [--bridge-port PORT] [--share] [--no-open]" >&2; exit 2 ;;
   esac
 done
 [[ "$port" =~ ^[0-9]+$ && ${#port} -le 5 ]] && ((10#$port > 1023 && 10#$port < 65536)) || { echo 'Port must be 1024–65535.' >&2; exit 2; }
+[[ "$bridge_port" =~ ^[0-9]+$ && ${#bridge_port} -le 5 ]] && ((10#$bridge_port > 1023 && 10#$bridge_port < 65536 && 10#$bridge_port != 10#$port)) || { echo 'Bridge port must be 1024–65535 and different from the app port.' >&2; exit 2; }
 command -v docker >/dev/null || { echo 'Install Docker with Compose, then run ./run again.' >&2; exit 1; }
 docker compose version >/dev/null
 docker info >/dev/null 2>&1 || { echo 'Start your Docker engine, then run ./run again.' >&2; exit 1; }
 export AGENTWAY_PORT="$port"
+export AGENTWAY_BRIDGE_PORT="$bridge_port"
 url="http://127.0.0.1:$port"
 printf 'Building and starting AgentWay at %s…\n' "$url"
 if ! docker compose up --build --detach --wait --wait-timeout 120; then
   docker compose logs --tail 60 >&2
-  echo 'Startup failed. If the port is occupied, use ./run --port 8788. No other process was stopped.' >&2
+  echo 'Startup failed. If the port is occupied, use ./run --port 8790. No other process was stopped.' >&2
   exit 1
+fi
+if "$share"; then
+  command -v curl >/dev/null || { echo 'curl is required to configure the tunnel address.' >&2; exit 1; }
+  docker compose --profile share up --detach --force-recreate tunnel
+  tunnel_url=""
+  for attempt in {1..30}; do
+    tunnel_url=$(docker compose logs --no-color tunnel 2>&1 | sed -nE 's/.*(https:\/\/[a-z0-9-]+\.trycloudflare\.com).*/\1/p' | tail -1)
+    [[ -n "$tunnel_url" ]] && break
+    sleep 1
+  done
+  [[ -n "$tunnel_url" ]] || { echo 'Tunnel did not start. See docker compose logs tunnel.' >&2; exit 1; }
+  curl --fail --silent --show-error -H 'Content-Type: application/json' --data "{\"url\":\"$tunnel_url\"}" "$url/api/publishing/bridge" >/dev/null
+  printf 'Agent endpoint: %s (authenticated; temporary address)\n' "$tunnel_url"
 fi
 printf '\nAgentWay is ready: %s\nStop: ./stop   Logs: docker compose logs -f\n' "$url"
 if "$open_browser"; then

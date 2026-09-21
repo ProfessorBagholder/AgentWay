@@ -17,6 +17,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=server /app/target/release/agentway-server /usr/local/bin/agentway-server
 COPY --from=web /app/web/dist /app/web
 USER agentway
-ENV BIND_ADDR=0.0.0.0:8787 DATABASE_URL=sqlite:///data/agentway.db ASSET_DIR=/app/web
+ENV BIND_ADDR=0.0.0.0:8787 DATABASE_URL=sqlite:///data/agentway.db ASSET_DIR=/app/web PUBLISHING_DIR=/data/publishing BRIDGE_BIND_ADDR=0.0.0.0:8788
 EXPOSE 8787
 ENTRYPOINT ["agentway-server"]

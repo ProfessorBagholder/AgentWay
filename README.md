@@ -2,7 +2,7 @@
 
 A personal bridge between the AI agents you already use and the places you publish.
 
-**Status: runnable foundation, not a finished agent integration.** Rust server, React frontend, SQLite persistence, task queue and selective live UI updates are implemented. Actual Grok Bot, Muse, ChatGPT and Claude connections, quota reporting, delegation, artifact transfer and publishing are not implemented yet. Registering an agent does not authenticate it. Saved tasks do not run or consume AI usage.
+**Status: YouTube publishing integration under account-backed validation.** The Publishing screen configures Google OAuth, displays upload progress/results, and supplies authenticated HTTP/MCP connection instructions. Media transfer and resumable YouTube uploads are implemented. A real Muse-to-YouTube test still requires your account authorization; automated tests use a simulated provider. Cross-agent execution, quota-aware delegation and other publishing destinations remain unimplemented. Saved agent records and tasks still do not execute.
 
 ## Run locally
 
@@ -21,15 +21,15 @@ git pull
 ./run
 ```
 
-Default address: loopback port 8787. Use `./run --port 8788` for another port or `./run --no-open` on a headless machine. Windows: `./run.ps1` (PowerShell); use `-Port 8788` or `-NoOpen`. Stop with `./stop` or `docker compose stop`. Logs: `docker compose logs -f`.
+Default address: loopback port 8787. Use `./run --port 8790` for another port or `./run --no-open` on a headless machine. Windows: `./run.ps1` (PowerShell); use `-Port 8790` or `-NoOpen`. Stop with `./stop` or `docker compose stop`. Logs: `docker compose logs -f`.
 
-Data lives in the `agentway_agentway-data` Docker volume and survives rebuilds and stops. **Do not run `docker compose down -v` unless you intend to erase your data.** This foundation accepts only local browser access; remote/LAN hosting stays disabled until scoped authentication is implemented. No AI API keys are needed to try the UI.
+Data lives in the `agentway_agentway-data` Docker volume and survives rebuilds and stops. **Do not run `docker compose down -v` unless you intend to erase your data.** The management interface accepts only local browser access. A separate bearer-authenticated agent listener uses port 8788. No model API keys are needed.
 
 ## Current behavior
 
 - Register actual agent identities and manager/worker roles. Every registration is clearly unconfigured.
 - Save and cancel assignments. Idempotent task requests avoid duplicate assignments.
-- View unknown capacity rather than fabricated allowance numbers.
+- Configure YouTube OAuth and receive real upload jobs from existing agents through HTTP or MCP.
 - Watch changes arrive in other open windows through replayable server-sent events. Mutation responses update individual resource caches; no document reload or dashboard refetch.
 - Restart the application without losing saved state.
 
@@ -37,7 +37,7 @@ Data lives in the `agentway_agentway-data` Docker volume and survives rebuilds a
 
 Rust/Tokio + Axum + SQLx/SQLite. React/TypeScript + TanStack Query. Vite runs at build time; Rust serves the compiled frontend and API on one origin. There is no Node server in the running container. Native SQLite event polling is currently bounded at two reads/second per connected browser; browsers do not poll API resources. This simple implementation will gain centralized event fanout and retention before remote deployment. Bootstrap currently loads all locally saved registrations/tasks; pagination is a pre-scale milestone.
 
-Domain integration and MCP work are next. The official Rust MCP SDK will be integrated when a real agent round trip can be tested; this repository does not label a placeholder MCP endpoint as functional.
+Publishing uses the official Rust MCP SDK, oauth2, reqwest and authenticated encryption. See [YouTube setup and Muse connection](docs/youtube-publishing.md) for account setup, HTTPS access, limits and verification status. For a temporary hosted-agent endpoint, use `./run --share`.
 
 ## Contributing and checks
 

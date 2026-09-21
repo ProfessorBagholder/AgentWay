@@ -19,10 +19,13 @@ import {
   upsertTask,
 } from "./api";
 import "./style.css";
+import { Publishing, upsertPublication, type Publication } from "./publishing";
 
 type Page = "Agents" | "Tasks" | "Publishing";
 function App() {
-  const [page, setPage] = useState<Page>("Agents");
+  const [page, setPage] = useState<Page>(
+    window.location.hash === "#publishing" ? "Publishing" : "Agents",
+  );
   const [ready, setReady] = useState(false);
   const [error, setError] = useState("");
   const [connection, setConnection] = useState("connecting");
@@ -37,6 +40,17 @@ function App() {
         setReady(true);
         stream = new EventSource(`/api/events?after=${snapshot.cursor}`);
         stream.onopen = () => setConnection("connected");
+        stream.addEventListener("publication.upsert", (event) =>
+          upsertPublication(
+            JSON.parse((event as MessageEvent).data) as Publication,
+          ),
+        );
+        stream.addEventListener("youtube.status", (event) => {
+          const status = JSON.parse((event as MessageEvent).data);
+          void cache.cancelQueries({ queryKey: ["youtube"] }).then(() => {
+            cache.setQueryData(["youtube"], status);
+          });
+        });
         stream.onerror = () => setConnection("reconnecting");
         stream.addEventListener("agent.upsert", (event) =>
           upsertAgent(JSON.parse((event as MessageEvent).data) as Agent),
@@ -255,14 +269,6 @@ function TaskRow({ id }: { id: string }) {
         </button>
       )}
     </div>
-  );
-}
-function Publishing() {
-  return (
-    <section className="panel empty">
-      <h2>Publishing is not available yet</h2>
-      <p>This version cannot connect social accounts or publish content.</p>
-    </section>
   );
 }
 function Modal({

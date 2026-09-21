@@ -1,3 +1,4 @@
+pub mod publishing;
 use axum::{
     Json, Router,
     extract::{Path, Query, Request, State},
@@ -136,7 +137,10 @@ async fn local_only(request: Request, next: Next) -> Response {
     if !matches!(hostname, "127.0.0.1" | "localhost") {
         return (StatusCode::FORBIDDEN, "Local access only").into_response();
     }
-    if headers.get("sec-fetch-site").and_then(|h| h.to_str().ok()) == Some("cross-site") {
+    if headers.get("sec-fetch-site").and_then(|h| h.to_str().ok()) == Some("cross-site")
+        && !(request.method() == axum::http::Method::GET
+            && request.uri().path() == "/api/youtube/callback")
+    {
         return (StatusCode::FORBIDDEN, "Cross-site access denied").into_response();
     }
     if let Some(origin) = headers.get("origin") {

@@ -16,17 +16,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse()?;
     let db = database(&url).await?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!(%addr, "AgentWay ready; provider execution is not yet implemented");
+
     let token = tokio_util::sync::CancellationToken::new();
+    let publisher = agentway_server::publishing::Publisher::new(
+        db.clone(),
+        std::env::var("PUBLISHING_DIR")
+            .unwrap_or_else(|_| ".agentway/publishing".into())
+            .into(),
+        token.clone(),
+    )
+    .await?;
+    let bridge_addr: SocketAddr = std::env::var("BRIDGE_BIND_ADDR")
+        .unwrap_or_else(|_| "127.0.0.1:8788".into())
+        .parse()?;
+    let bridge_listener = tokio::net::TcpListener::bind(bridge_addr).await?;
+    let bridge_token = token.clone();
+    let bridge_router = publisher.bridge_router();
+    let bridge = tokio::spawn(async move {
+        axum::serve(bridge_listener, bridge_router)
+            .with_graceful_shutdown(bridge_token.cancelled_owned())
+            .await
+    });
+    let worker = publisher.start_worker();
+    tracing::info!(%addr, %bridge_addr, "AgentWay ready");
     let server = axum::serve(
         listener,
-        router_with_shutdown(db.clone(), &assets, token.clone()),
+        router_with_shutdown(db.clone(), &assets, token.clone()).merge(publisher.admin_router()),
     )
     .with_graceful_shutdown(async move {
         shutdown().await;
         token.cancel();
     });
     server.await?;
+    bridge.await??;
+    worker.await?;
     db.close().await;
     Ok(())
 }

@@ -5,6 +5,7 @@ services:
     init: true
     ports:
       - "127.0.0.1:${AGENTWAY_PORT:-8787}:8787"
+      - "127.0.0.1:${AGENTWAY_BRIDGE_PORT:-8788}:8788"
     volumes:
       - agentway-data:/data
     restart: unless-stopped
@@ -15,6 +16,17 @@ services:
       timeout: 2s
       retries: 20
       start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+  tunnel:
+    image: cloudflare/cloudflared:2026.9.1
+    profiles: [share]
+    command: tunnel --no-autoupdate --url http://app:8788
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: "no"
     security_opt:
       - no-new-privileges:true
     cap_drop: ["ALL"]

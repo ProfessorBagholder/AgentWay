@@ -2,11 +2,11 @@
 name = "agentway-server"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 
 [dependencies]
 axum = "0.8"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "net"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "net", "fs", "io-util"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -16,6 +16,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 async-stream = "0.3"
 tokio-util = "0.7"
+
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+oauth2 = "5"
+rmcp = { version = "3.4", features = ["transport-streamable-http-server"] }
+schemars = "1"
+chacha20poly1305 = "0.10"
+base64 = "0.22"
+sha2 = "0.10"
+subtle = "2"
+anyhow = "1"
+futures-util = "0.3"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
