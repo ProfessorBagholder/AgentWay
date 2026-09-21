@@ -5,22 +5,24 @@
   try {
     if (localStorage.getItem(key) === "light") theme = "light";
   } catch {}
-  document.documentElement.dataset.theme = theme;
-  document.addEventListener("DOMContentLoaded", () => {
-    const toggle = document.querySelector("#theme-toggle");
-    toggle.checked = theme === "dark";
-    toggle.addEventListener("change", () => {
-      theme = toggle.checked ? "dark" : "light";
-      document.documentElement.dataset.theme = theme;
-      try {
-        localStorage.setItem(key, theme);
-      } catch {}
+  function apply() {
+    document.documentElement.dataset.theme = theme;
+    document.querySelectorAll('input[name="theme"]').forEach((input) => {
+      input.checked = input.value === theme;
     });
-    window.addEventListener("storage", (event) => {
-      if (event.key !== key) return;
-      theme = event.newValue === "light" ? "light" : "dark";
-      document.documentElement.dataset.theme = theme;
-      toggle.checked = theme === "dark";
-    });
+  }
+  apply();
+  document.addEventListener("change", (event) => {
+    if (!event.target.matches('input[name="theme"]')) return;
+    theme = event.target.value === "light" ? "light" : "dark";
+    apply();
+    try {
+      localStorage.setItem(key, theme);
+    } catch {}
+  });
+  window.addEventListener("storage", (event) => {
+    if (event.key !== key) return;
+    theme = event.newValue === "light" ? "light" : "dark";
+    apply();
   });
 })();

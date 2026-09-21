@@ -212,4 +212,4 @@ Across every screen, include only labels, meaningful status, and concise help ne
 
 ## Appearance
 
-Dark is the initial default, using the original slate background (#11151b), sidebar (#151a21), pale text (#e1e6ed) and green accent (#c0e7ae). Light remains an explicit option. A labelled theme switch persists the choice across routes and reloads, applying before first paint. Theme changes affect appearance only, with no page reload or data refetch.
+Dark is the initial default, using the original slate background (#11151b), sidebar (#151a21), pale text (#e1e6ed) and green accent (#c0e7ae). Light remains an explicit option. Settings → Appearance contains a labelled Light/Dark selector with sun/moon icons. It persists the choice across routes and reloads, applying before first paint. Theme changes affect appearance only, with no page reload or data refetch.
