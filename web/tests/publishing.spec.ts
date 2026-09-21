@@ -74,3 +74,21 @@ test("publishing shows setup failures without navigating away", async ({
     page.getByLabel("Client secret", { exact: true }),
   ).toHaveAttribute("type", "password");
 });
+
+test("an external authorization page can return to the app", async ({
+  page,
+  baseURL,
+}) => {
+  // Reproduce browser Fetch Metadata after consent without using a Google account.
+  await page.route("https://oauth-test.example/consent", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: `<a href="${baseURL}/#publishing">Return to AgentWay</a>`,
+    }),
+  );
+  await page.goto("https://oauth-test.example/consent");
+  await page.getByRole("link", { name: "Return to AgentWay" }).click();
+  await expect(
+    page.getByRole("heading", { name: "YouTube", exact: true }),
+  ).toBeVisible();
+});

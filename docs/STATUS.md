@@ -11,7 +11,7 @@
 
 ## Validation still required
 
-Muse is the selected first agent. The actual Muse connector, Google consent and real private video upload require the user's configured accounts. Local protocol/provider simulations do not establish that end-to-end result. See [setup and verification](youtube-publishing.md).
+Muse is the selected first agent. Google consent and connected-channel discovery have succeeded with the user's account. The actual Muse connector and private video upload remain to be verified. Local protocol/provider simulations do not establish that end-to-end result. See [setup and verification](youtube-publishing.md).
 
 ## Not implemented
 

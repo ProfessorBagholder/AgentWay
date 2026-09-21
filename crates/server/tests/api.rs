@@ -165,3 +165,53 @@ async fn events_replay_after_cursor_and_close_on_shutdown() {
     );
     db.close().await;
 }
+
+#[tokio::test]
+async fn oauth_return_allows_document_navigation_but_not_cross_site_api_access() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("index.html"), "AgentWay app").unwrap();
+    let db = database(&format!(
+        "sqlite://{}",
+        dir.path().join("test.db").display()
+    ))
+    .await
+    .unwrap();
+    let app = router(db.clone(), dir.path().to_str().unwrap());
+    for (method, path, mode, dest, expected) in [
+        ("GET", "/", "navigate", "document", StatusCode::OK),
+        (
+            "POST",
+            "/api/agents",
+            "navigate",
+            "document",
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "GET",
+            "/api/bootstrap",
+            "navigate",
+            "document",
+            StatusCode::FORBIDDEN,
+        ),
+        ("GET", "/", "cors", "empty", StatusCode::FORBIDDEN),
+        ("GET", "/", "navigate", "iframe", StatusCode::FORBIDDEN),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("host", "127.0.0.1:8787")
+                    .header("sec-fetch-site", "cross-site")
+                    .header("sec-fetch-mode", mode)
+                    .header("sec-fetch-dest", dest)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{method} {path} {mode} {dest}");
+    }
+    db.close().await;
+}

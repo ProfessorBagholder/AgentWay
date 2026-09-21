@@ -139,7 +139,12 @@ async fn local_only(request: Request, next: Next) -> Response {
     }
     if headers.get("sec-fetch-site").and_then(|h| h.to_str().ok()) == Some("cross-site")
         && !(request.method() == axum::http::Method::GET
-            && request.uri().path() == "/api/youtube/callback")
+            && (request.uri().path() == "/api/youtube/callback"
+                || (request.uri().path() == "/"
+                    && headers.get("sec-fetch-mode").and_then(|h| h.to_str().ok())
+                        == Some("navigate")
+                    && headers.get("sec-fetch-dest").and_then(|h| h.to_str().ok())
+                        == Some("document"))))
     {
         return (StatusCode::FORBIDDEN, "Cross-site access denied").into_response();
     }
