@@ -47,7 +47,7 @@ Track declaration (owner/agent input) separately from provider-enforced classifi
 
 ## UI placement
 
-- **Destinations → YouTube account → Publishing defaults:** reusable category, language, license and notification choices, plus explicit owner restrictions. Group advanced settings behind disclosure; no giant mandatory form.
+- **Platforms → YouTube:** account identity, connection state and named agents. Do not place speculative category, default visibility or public-publishing controls here. Video-specific choices are submitted by agents and inspected on the task.
 - **Tasks → publication → Video settings:** compact readable summary of content disclosures and visibility, then expandable metadata/distribution/assets. Show exceptions first, with source and observed value when useful.
 - Editing a setting is a real authorized operation on that video, with immediate targeted updates. Agents can perform the same operation through their tool contract.
 - Settings absent from the current connector are labelled accurately in capability details. Do not render inert controls that imply support.

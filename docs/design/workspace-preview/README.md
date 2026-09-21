@@ -14,7 +14,7 @@ Review paths:
 
 1. **Agents:** multiple providers and two agents sharing one account allowance. Open a connection to inspect permissions, pause/resume it, and see honest unknown capacity.
 2. **Connect agent:** product and connection name → permissions → platform-specific connection boundary → explicitly simulated verification. Native authorization steps are not invented or implemented here.
-3. **Destinations:** account access and publishing defaults; only simulated changes. The picker shows YouTube only; planned connectors stay in the design documentation.
+3. **Platforms:** Platform, Account, Status and named Agents; selecting a row opens platform-led account detail. The picker shows YouTube only; planned connectors stay in the design documentation.
 4. **Tasks:** progress, partial completion, retrying an optional operation on the same video, and field-level video settings/disclosures, and a View activity link to the filtered log.
 5. **Activity log:** operations with expandable diagnostic steps, errors and JSON export, including failures before task creation.
 6. **Settings:** agent connection endpoint.

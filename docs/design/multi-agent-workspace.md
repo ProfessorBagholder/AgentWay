@@ -213,3 +213,7 @@ Across every screen, include only labels, meaningful status, and concise help ne
 ## Appearance
 
 Dark is the initial default, using the original slate background (#11151b), sidebar (#151a21), pale text (#e1e6ed) and green accent (#c0e7ae). Light remains an explicit option. Settings → Appearance contains a labelled Light/Dark selector with sun/moon icons. It persists the choice across routes and reloads, applying before first paint. Theme changes affect appearance only, with no page reload or data refetch.
+
+## Platforms screen revision
+
+The user-facing section is **Platforms**. List one row per connected account using Platform, Account, Status and Agents, displaying actual agent names. Reflow all four fields at narrow widths. Selecting the row opens platform-led detail with account, connection state and agent access. Remove format subtitles, category/default-visibility dropdowns and public-publishing checkboxes from this screen. Agents provide video-specific settings through publishing requests; that API requirement remains. This replaces prior destination-screen UI/defaults recommendations.

@@ -42,11 +42,6 @@ const agents = [
     access: false,
   },
 ];
-let defaults = {
-  category: "Entertainment",
-  visibility: "Private",
-  allowPublic: true,
-};
 let retryDone = false,
   wizard = {
     step: 1,
@@ -103,39 +98,38 @@ function connect() {
     `<div class="narrow"><div class="steps">${["Agent", "Permissions", "Connect", "Verify"].map((s, i) => (i + 1 === w.step ? `<strong>${i + 1}. ${s}</strong>` : `<span>${i + 1}. ${s}</span>`)).join("")}</div><section class="panel"><form id="setup" class="pad">${w.step === 1 ? `<h2>Which agent are you connecting?</h2><label for="product">Agent platform</label><select id="product">${["Muse", "ChatGPT agents", "Claude agents", "Grok Bot"].map((p) => `<option ${p === w.product ? "selected" : ""}>${p}</option>`).join("")}</select><label for="name">Connection name</label><input id="name" required maxlength="80" placeholder="e.g. Research assistant" value="${escape(w.name)}">` : w.step === 2 ? `<h2>Choose what it can access</h2><p>${escape(w.name)} · ${w.product}</p><label class="check"><input id="publish" type="checkbox" ${w.publish ? "checked" : ""}> Publish to Professor Bagholder · YouTube</label><label class="check"><input id="delegate" type="checkbox" ${w.delegate ? "checked" : ""}> Delegate to Episode editor and Clip writer</label>` : w.step === 3 ? `<h2>Connect from ${w.product}</h2><p>Connection setup is unavailable in this preview.</p>` : `<h2>Ready to verify</h2><p>Simulate a connection to continue.</p>`}<div class="actions">${w.step > 1 ? '<button type="button" data-action="previous">Back</button>' : ""}<button class="primary" type="submit">${w.step === 4 ? "Simulate verification" : "Continue"}</button></div></form></section></div>`
   );
 }
-function destinations() {
+function platformAgents() {
   return (
-    heading(
-      "Destinations",
-      "",
-      link("destinations/connect", "Connect destination", true),
-    ) +
-    `<section class="panel" aria-labelledby="youtube-platform"><div class="panel-title"><h2 id="youtube-platform">YouTube</h2><span class="sub">Videos and Shorts</span></div><div class="row head destination-head"><span>Account</span><span>Account status</span><span>Agents with access</span><span></span></div><div class="row destination-row"><div><a href="#/destinations/youtube"><strong>Professor Bagholder</strong></a></div><div><span class="field-label">Account status</span>${badge("Connected")}</div><div><span class="field-label">Agents with access</span>${agents.filter((a) => a.access).length} ${agents.filter((a) => a.access).length === 1 ? "agent" : "agents"}</div><a href="#/destinations/youtube" aria-label="Manage YouTube">→</a></div></section>`
+    agents
+      .filter((a) => a.access)
+      .map(
+        (a) =>
+          `<a href="#/agents/${a.id}">${escape(a.name)}<span class="sub">${escape(a.product)}</span></a>`,
+      )
+      .join("") || '<span class="muted">None</span>'
   );
 }
-function destination() {
+function platforms() {
   return (
-    back("destinations", "Destinations") +
     heading(
-      "Professor Bagholder",
-      "YouTube · Videos and Shorts",
-      badge("Connected"),
+      "Platforms",
+      "",
+      link("platforms/connect", "Connect platform", true),
     ) +
-    `<div class="grid"><section class="panel"><div class="panel-title"><h2>Publishing defaults</h2></div><form class="pad" id="defaults"><label for="category">Category</label><select id="category">${["Entertainment", "Comedy", "Education"].map((v) => `<option ${defaults.category === v ? "selected" : ""}>${v}</option>`).join("")}</select><label for="visibility">Default visibility</label><select id="visibility">${["Private", "Public", "Unlisted"].map((v) => `<option ${defaults.visibility === v ? "selected" : ""}>${v}</option>`).join("")}</select><label class="check"><input id="allow-public" type="checkbox" ${defaults.allowPublic ? "checked" : ""}> Allow agents with publishing permission to publish publicly</label><button type="submit">Save defaults</button></form></section><div><section class="panel"><div class="panel-title"><h2>Agents with access</h2></div><div class="pad">${
-      agents
-        .filter((a) => a.access)
-        .map(
-          (a) =>
-            `<div class="kv"><a href="#/agents/${a.id}">${escape(a.name)}</a><span>Publish</span></div>`,
-        )
-        .join("") || "<p>No agents have publishing permission.</p>"
-    }</div></section></div></div>`
+    `<section class="panel"><table class="platform-table" aria-label="Connected platforms"><thead><tr><th scope="col">Platform</th><th scope="col">Account</th><th scope="col">Status</th><th scope="col">Agents</th></tr></thead><tbody><tr data-platform="youtube"><td data-label="Platform"><a class="platform-name" href="#/platforms/youtube">YouTube</a></td><td data-label="Account">Professor Bagholder</td><td data-label="Status">${badge("Connected")}</td><td data-label="Agents"><div class="platform-agents">${platformAgents()}</div></td></tr></tbody></table></section>`
+  );
+}
+function platform() {
+  return (
+    back("platforms", "Platforms") +
+    heading("YouTube", "", badge("Connected")) +
+    `<div class="narrow"><section class="panel"><div class="pad">${kv("Account", "Professor Bagholder")}</div></section><section class="panel"><div class="panel-title"><h2>Agents</h2></div><div class="pad platform-agents">${platformAgents()}</div></section></div>`
   );
 }
 function catalog() {
   return (
-    back("destinations", "Destinations") +
-    heading("Connect a destination", "") +
+    back("platforms", "Platforms") +
+    heading("Connect a platform", "") +
     `<section class="panel"><div class="pad"><h2>YouTube</h2><button data-action="destination-demo">Preview account enrollment</button></div></section>`
   );
 }
@@ -451,6 +445,10 @@ function render() {
   let [area, id, tab] = (
     location.hash.replace(/^#\//, "").split("?")[0] || "agents"
   ).split("/");
+  if (area === "destinations") {
+    location.replace(location.hash.replace("#/destinations", "#/platforms"));
+    return;
+  }
   if (area === "events" || (area === "tasks" && tab === "events")) {
     const query = new URLSearchParams(location.hash.split("?")[1] || "");
     if (area === "tasks") query.set("task", id);
@@ -468,12 +466,12 @@ function render() {
         : id
           ? agentDetail(id)
           : agentList()
-      : area === "destinations"
+      : area === "platforms"
         ? id === "connect"
           ? catalog()
           : id
-            ? destination()
-            : destinations()
+            ? platform()
+            : platforms()
         : area === "tasks"
           ? id
             ? task(id, tab)
@@ -490,6 +488,9 @@ window.addEventListener("hashchange", () => {
   main.focus({ preventScroll: true });
 });
 main.addEventListener("click", (e) => {
+  const row = e.target.closest("[data-platform]");
+  if (row && !e.target.closest("a,button,input"))
+    location.hash = "/platforms/" + row.dataset.platform;
   const b = e.target.closest("[data-action]");
   if (!b) return;
   const a = agents.find((a) => a.id === b.dataset.id);
@@ -530,15 +531,6 @@ main.addEventListener("click", (e) => {
 });
 main.addEventListener("submit", (e) => {
   e.preventDefault();
-  if (e.target.id === "defaults") {
-    defaults = {
-      category: document.querySelector("#category").value,
-      visibility: document.querySelector("#visibility").value,
-      allowPublic: document.querySelector("#allow-public").checked,
-    };
-    notice("Defaults saved in this preview only; no account was changed.");
-    return;
-  }
   if (e.target.id !== "setup") return;
   if (wizard.step === 1) {
     wizard.name = document.querySelector("#name").value.trim();

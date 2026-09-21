@@ -804,3 +804,66 @@ th {
   outline: 2px solid var(--focus);
   outline-offset: 3px;
 }
+
+.platform-table th {
+  background: var(--surface);
+  padding: 14px 24px;
+}
+.platform-table td {
+  padding: 22px 24px;
+  vertical-align: middle;
+}
+.platform-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.platform-table tbody tr {
+  cursor: pointer;
+}
+.platform-table tbody tr:hover {
+  background: var(--hover);
+}
+.platform-name {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--text);
+}
+.platform-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+@media (max-width: 900px) {
+  .platform-table,
+  .platform-table tbody,
+  .platform-table tr {
+    display: block;
+  }
+  .platform-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .platform-table td {
+    display: grid;
+    grid-template-columns: 85px minmax(0, 1fr);
+    gap: 14px;
+    padding: 12px 20px;
+    border: 0;
+  }
+  .platform-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .platform-table td:first-child {
+    padding-top: 22px;
+  }
+  .platform-table td:last-child {
+    padding-bottom: 22px;
+  }
+  .platform-table td .badge {
+    justify-self: start;
+  }
+}

@@ -21,3 +21,4 @@
 - Tasks presents work state, results and recovery. Activity log presents operation history and diagnostic steps. Link from a task to the log filtered by task ID; do not duplicate the log as a task tab.
 - Preserve the original AgentWay dark palette (slate surfaces and pale green accent). Offer light/dark selection with a persisted preference; do not replace the established theme during unrelated design work.
 - Appearance controls belong in Settings → Appearance. Use labelled Light/Dark choices with sun/moon icons, consistent with existing controls; do not add an arbitrary sidebar toggle.
+- Platforms uses Platform, Account, Status and Agents columns; show actual agent names. Platform detail leads with the platform name. Omit format subtitles and speculative publishing-default controls; video settings are supplied through the agent publishing flow.
