@@ -2,7 +2,7 @@
 
 A personal bridge between the AI agents you already use and the places you publish.
 
-**Status: YouTube publishing integration under account-backed validation.** The Publishing screen configures Google OAuth, displays upload progress/results, and supplies authenticated HTTP/MCP connection instructions. Media transfer and resumable YouTube uploads are implemented. A real Muse-to-YouTube test still requires your account authorization; automated tests use a simulated provider. Cross-agent execution, quota-aware delegation and other publishing destinations remain unimplemented. Saved agent records and tasks still do not execute.
+**Status: first Muse-to-YouTube publishing path verified.** The Publishing screen configures Google OAuth, displays upload progress/results, and supplies authenticated HTTP/MCP connection instructions. Media transfer and resumable YouTube uploads are implemented. The user completed a real Muse-to-YouTube upload and confirmed playback and Private visibility. Automated failure/recovery tests additionally use a simulated provider. Cross-agent execution, quota-aware delegation and other publishing destinations remain unimplemented. Saved agent records and tasks still do not execute.
 
 ## Run locally
 

@@ -9,9 +9,9 @@
 - Publishing UI consumes targeted status/record events without unrelated refetches.
 - Compose launcher with optional temporary HTTPS tunnel for a hosted agent; `./run --share`.
 
-## Validation still required
+## Live validation
 
-Muse is the selected first agent. Google consent and connected-channel discovery have succeeded with the user's account. The actual Muse connector and private video upload remain to be verified. Local protocol/provider simulations do not establish that end-to-end result. See [setup and verification](youtube-publishing.md).
+The user completed the Muse → AgentWay → YouTube flow: Google consent, channel discovery, authenticated Muse connection, media transfer and video upload. The user confirmed playback and Private visibility with a YouTube screenshot. This validates the HTTP connector path with Muse; the MCP path has automated protocol coverage, not a separate live agent test. See [setup and verification](youtube-publishing.md).
 
 ## Not implemented
 

@@ -1,6 +1,6 @@
 # YouTube publishing with an existing agent
 
-This branch adds a real YouTube API upload path and an authenticated HTTP/MCP bridge. Account-backed validation with Muse is still required. AgentWay does not generate, edit or transcode the video.
+This branch adds a real YouTube API upload path and an authenticated HTTP/MCP bridge. The user has verified the HTTP path with Muse and a real private YouTube upload. AgentWay does not generate, edit or transcode the video.
 
 ## Start
 
@@ -50,7 +50,7 @@ A single worker streams 8 MiB chunks to YouTube. The session is encrypted and pe
 
 ## Verified versus pending
 
-Automated tests cover auth boundaries, incomplete media, policy enforcement, concurrent idempotent submissions, OAuth state binding/replay, MCP discovery/tool invocation, and recovery after a lost final response using a simulated YouTube server. Google consent and channel discovery have now succeeded against the user's real account. A browser return-navigation defect found during that test was fixed with backend and browser regression coverage. Google project audit approval, Muse connectivity and a real uploaded video are still unverified.
+Automated tests cover auth boundaries, incomplete media, policy enforcement, concurrent idempotent submissions, OAuth state binding/replay, MCP discovery/tool invocation, and recovery after a lost final response using a simulated YouTube server. Google consent and channel discovery have now succeeded against the user's real account. A browser return-navigation defect found during that test was fixed with backend and browser regression coverage. The user subsequently confirmed Muse connectivity and a real video upload, with playback and Private visibility shown in YouTube. Google project audit approval and a live agent test over MCP remain unverified.
 
 ## References
 
