@@ -12,3 +12,5 @@
 - Commits use author and committer `ProfessorBagholder <322563513+ProfessorBagholder@users.noreply.github.com>` and `Co-authored-by: Codex <codex@openai.com>`. Preserve the existing identity hooks.
 - Relevant checks: `cargo fmt --check`, `cargo clippy --locked --workspace --all-targets -- -D warnings`, `cargo test --locked --workspace`, `npm --prefix web run format:check`, `npm --prefix web run build`, and browser tests against the running app for changed interactions.
 - See `docs/design/` for intended product scope; `docs/STATUS.md` distinguishes implemented behavior from plans.
+
+- UI copy must serve an immediate user decision, status or recovery action. Do not place design rationale, implementation commentary, slogans, obvious feature explanations or redundant instructional footers anywhere in the app. Keep those in design documents or conversation. A single clearly separated design-preview notice is sufficient; do not repeat preview commentary inside every screen.

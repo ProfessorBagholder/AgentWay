@@ -184,3 +184,7 @@ Each slice is a focused PR with visual and behavioral checks, no unrelated resty
 - [MCP authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization): protected resources, scopes, audience binding and client interoperability. Pin and test the version supported by each actual client.
 - [WCAG 2.2](https://www.w3.org/TR/WCAG22/): accessibility requirements; a visual preview alone does not establish conformance.
 - Existing repository: engineering-contract.md, bridge-design.md, connector-package-plan.md and ../STATUS.md. Earlier provider claims are hypotheses unless backed by the evidence baseline above.
+
+## UI copy rule
+
+Across every screen, include only labels, meaningful status, and concise help necessary for a decision or recovery. Omit slogans, design rationale, implementation commentary, obvious explanations and redundant footers. Keep technical/design discussion in this document. The review artifact has one global preview notice; individual screens should read like the product, not a narrated design presentation. Group destinations under prominent platform headings, with account identities below.
