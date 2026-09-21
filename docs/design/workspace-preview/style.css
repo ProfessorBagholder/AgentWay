@@ -649,3 +649,8 @@ th {
     width: auto;
   }
 }
+
+.toolbar .activity-link {
+  margin-left: auto;
+  color: #4b43be;
+}

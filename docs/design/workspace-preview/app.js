@@ -371,32 +371,22 @@ function operationEvents(id) {
   ];
   return id ? operations.filter((o) => o.task === id) : operations;
 }
-function eventView(id) {
+function eventView() {
   const params = new URLSearchParams(location.hash.split("?")[1] || "");
+  const id = params.get("task") || undefined;
   const errors = params.get("level") === "error";
   const operations = operationEvents(id).filter(
     (o) => !errors || o.steps.some((s) => s.level === "error"),
   );
-  const route = id ? `tasks/${id}/events` : "events";
-  return `<div class="split event-controls"><div class="toolbar"><a class="${!errors ? "selected" : ""}" href="#/${route}">All events</a><a class="${errors ? "selected" : ""}" href="#/${route}?level=error">With errors</a></div><button data-action="export-events" data-task="${id || ""}">Export diagnostics</button></div><section class="panel event-list">${operations.length ? operations.map((o) => `<details class="operation"><summary><span class="event-title"><strong>${escape(o.action)}</strong><span class="sub">${escape(o.subject)}</span></span><span class="badge ${o.status === "Failed" ? "error" : o.status === "Complete" ? "good" : "warn"}">${o.status}</span><span class="event-context"><span><span class="field-name">Agent</span>${escape(o.agent)}</span><span><span class="field-name">Destination</span>${escape(o.destination)}</span><span><span class="field-name">Started</span>${escape(o.steps[0].time.replace("T", " ").replace("Z", " UTC"))}</span></span></summary><div class="operation-body"><div class="operation-meta"><span>${escape(o.id)}</span>${o.task ? `<a href="#/tasks/${o.task}">View task</a>` : ""}</div><ol class="operation-steps">${o.steps.map((e) => `<li><details class="step" ${e.level === "error" ? "open" : ""}><summary><span class="event-time">${escape(e.time.slice(11, 23))} UTC</span><span class="event-title">${escape(e.title)}</span>${e.level === "error" ? '<span class="badge error">Error</span>' : ""}</summary>${e.level === "error" ? `<p class="step-error">${escape(e.details.message || e.details.code)}</p>` : ""}<pre>${escape(JSON.stringify({ component: e.source, ...e.details }, null, 2))}</pre></details></li>`).join("")}</ol></div></details>`).join("") : '<div class="pad">No events recorded.</div>'}</section>`;
+  const route = id ? `activity?task=${encodeURIComponent(id)}` : "activity";
+  const errorRoute = route + (id ? "&" : "?") + "level=error";
+  return `${id ? `<div class="toolbar"><span>Task: ${escape(id === "episode" ? "Episode 12 teaser" : id === "test" ? "AgentWay public upload test" : id)}</span><a href="#/activity${errors ? "?level=error" : ""}">Clear filter</a></div>` : ""}<div class="split event-controls"><div class="toolbar"><a class="${!errors ? "selected" : ""}" href="#/${route}">All activity</a><a class="${errors ? "selected" : ""}" href="#/${errorRoute}">With errors</a></div><button data-action="export-events" data-task="${id || ""}">Export diagnostics</button></div><section class="panel event-list">${operations.length ? operations.map((o) => `<details class="operation"><summary><span class="event-title"><strong>${escape(o.action)}</strong><span class="sub">${escape(o.subject)}</span></span><span class="badge ${o.status === "Failed" ? "error" : o.status === "Complete" ? "good" : "warn"}">${o.status}</span><span class="event-context"><span><span class="field-name">Agent</span>${escape(o.agent)}</span><span><span class="field-name">Destination</span>${escape(o.destination)}</span><span><span class="field-name">Started</span>${escape(o.steps[0].time.replace("T", " ").replace("Z", " UTC"))}</span></span></summary><div class="operation-body"><div class="operation-meta"><span>${escape(o.id)}</span>${o.task ? `<a href="#/tasks/${o.task}">View task</a>` : ""}</div><ol class="operation-steps">${o.steps.map((e) => `<li><details class="step" ${e.level === "error" ? "open" : ""}><summary><span class="event-time">${escape(e.time.slice(11, 23))} UTC</span><span class="event-title">${escape(e.title)}</span>${e.level === "error" ? '<span class="badge error">Error</span>' : ""}</summary>${e.level === "error" ? `<p class="step-error">${escape(e.details.message || e.details.code)}</p>` : ""}<pre>${escape(JSON.stringify({ component: e.source, ...e.details }, null, 2))}</pre></details></li>`).join("")}</ol></div></details>`).join("") : '<div class="pad">No events recorded.</div>'}</section>`;
 }
 function taskTabs(id, view) {
-  return `<div class="toolbar"><a class="${!view ? "selected" : ""}" href="#/tasks/${id}">Progress</a>${id === "episode" ? `<a class="${view === "settings" ? "selected" : ""}" href="#/tasks/${id}/settings">Video settings</a>` : ""}<a class="${view === "events" ? "selected" : ""}" href="#/tasks/${id}/events">Events</a></div>`;
+  return `<div class="toolbar"><a class="${!view ? "selected" : ""}" href="#/tasks/${id}">Progress</a>${id === "episode" ? `<a class="${view === "settings" ? "selected" : ""}" href="#/tasks/${id}/settings">Video settings</a>` : ""}<a class="activity-link" href="#/activity?task=${encodeURIComponent(id)}">View activity →</a></div>`;
 }
 function task(id, view) {
   const settings = view === "settings";
-  if (view === "events")
-    return (
-      back("tasks", "Tasks") +
-      heading(
-        id === "episode"
-          ? "Publish Episode 12 teaser"
-          : "AgentWay public upload test",
-        "",
-      ) +
-      taskTabs(id, view) +
-      eventView(id)
-    );
   if (id === "test")
     return (
       back("tasks", "Tasks") +
@@ -461,6 +451,12 @@ function render() {
   let [area, id, tab] = (
     location.hash.replace(/^#\//, "").split("?")[0] || "agents"
   ).split("/");
+  if (area === "events" || (area === "tasks" && tab === "events")) {
+    const query = new URLSearchParams(location.hash.split("?")[1] || "");
+    if (area === "tasks") query.set("task", id);
+    location.replace("#/activity" + (query.size ? "?" + query.toString() : ""));
+    return;
+  }
   document.querySelectorAll("nav a").forEach((a) => {
     if (a.hash === `#/${area}`) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
@@ -482,8 +478,8 @@ function render() {
           ? id
             ? task(id, tab)
             : tasks()
-          : area === "events"
-            ? heading("Events", "") + eventView()
+          : area === "activity"
+            ? heading("Activity log", "") + eventView()
             : area === "settings"
               ? settings()
               : missing();
