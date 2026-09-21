@@ -64,7 +64,7 @@ const escape = (value) =>
       ],
   );
 const badge = (s) =>
-  `<span class="badge ${s === "Authorized" || s === "Published" || s === "Complete" ? "good" : s.includes("incomplete") || s.includes("attention") ? "warn" : ""}">${escape(s)}</span>`;
+  `<span class="badge ${s === "Connected" || s === "Authorized" || s === "Published" || s === "Complete" ? "good" : s.includes("incomplete") || s.includes("attention") ? "warn" : ""}">${escape(s)}</span>`;
 const kv = (k, v) => `<div class="kv"><span>${k}</span><span>${v}</span></div>`;
 const heading = (title, sub, action = "") =>
   `<div class="heading"><div><h1>${title}</h1>${sub ? `<p>${sub}</p>` : ""}</div>${action}</div>`;
@@ -110,7 +110,7 @@ function destinations() {
       "",
       link("destinations/connect", "Connect destination", true),
     ) +
-    `<section class="panel" aria-labelledby="youtube-platform"><div class="panel-title"><h2 id="youtube-platform">YouTube</h2><span class="sub">Videos and Shorts</span></div><div class="row head"><span>Account</span><span>Connection</span><span>Agent access</span><span></span></div><div class="row"><div><a href="#/destinations/youtube"><strong>Professor Bagholder</strong></a></div><div>${badge("Authorized")}</div><div>${agents.filter((a) => a.access).length} ${agents.filter((a) => a.access).length === 1 ? "agent" : "agents"}</div><a href="#/destinations/youtube" aria-label="Manage YouTube">→</a></div></section>`
+    `<section class="panel" aria-labelledby="youtube-platform"><div class="panel-title"><h2 id="youtube-platform">YouTube</h2><span class="sub">Videos and Shorts</span></div><div class="row head destination-head"><span>Account</span><span>Account status</span><span>Agents with access</span><span></span></div><div class="row destination-row"><div><a href="#/destinations/youtube"><strong>Professor Bagholder</strong></a></div><div><span class="field-label">Account status</span>${badge("Connected")}</div><div><span class="field-label">Agents with access</span>${agents.filter((a) => a.access).length} ${agents.filter((a) => a.access).length === 1 ? "agent" : "agents"}</div><a href="#/destinations/youtube" aria-label="Manage YouTube">→</a></div></section>`
   );
 }
 function destination() {
@@ -119,9 +119,9 @@ function destination() {
     heading(
       "Professor Bagholder",
       "YouTube · Videos and Shorts",
-      badge("Authorized"),
+      badge("Connected"),
     ) +
-    `<div class="grid"><section class="panel"><div class="panel-title"><h2>Publishing defaults</h2></div><form class="pad" id="defaults"><label for="category">Category</label><select id="category">${["Entertainment", "Comedy", "Education"].map((v) => `<option ${defaults.category === v ? "selected" : ""}>${v}</option>`).join("")}</select><label for="visibility">Default visibility</label><select id="visibility">${["Private", "Public", "Unlisted"].map((v) => `<option ${defaults.visibility === v ? "selected" : ""}>${v}</option>`).join("")}</select><label class="check"><input id="allow-public" type="checkbox" ${defaults.allowPublic ? "checked" : ""}> Allow agents with publishing permission to publish publicly</label><button type="submit">Save defaults</button></form></section><div><section class="panel"><div class="panel-title"><h2>Agent access</h2></div><div class="pad">${
+    `<div class="grid"><section class="panel"><div class="panel-title"><h2>Publishing defaults</h2></div><form class="pad" id="defaults"><label for="category">Category</label><select id="category">${["Entertainment", "Comedy", "Education"].map((v) => `<option ${defaults.category === v ? "selected" : ""}>${v}</option>`).join("")}</select><label for="visibility">Default visibility</label><select id="visibility">${["Private", "Public", "Unlisted"].map((v) => `<option ${defaults.visibility === v ? "selected" : ""}>${v}</option>`).join("")}</select><label class="check"><input id="allow-public" type="checkbox" ${defaults.allowPublic ? "checked" : ""}> Allow agents with publishing permission to publish publicly</label><button type="submit">Save defaults</button></form></section><div><section class="panel"><div class="panel-title"><h2>Agents with access</h2></div><div class="pad">${
       agents
         .filter((a) => a.access)
         .map(
