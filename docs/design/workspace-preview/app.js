@@ -355,7 +355,7 @@ function eventView(id) {
         a.time.localeCompare(b.time),
       );
   const events = all.filter((e) => !errors || e.level === "error");
-  const route = id ? `tasks/${id}/events` : "settings/events";
+  const route = id ? `tasks/${id}/events` : "events";
   return `<div class="split event-controls"><div class="toolbar"><a class="${!errors ? "selected" : ""}" href="#/${route}">All events</a><a class="${errors ? "selected" : ""}" href="#/${route}?level=error">Errors</a></div><button data-action="export-events" data-task="${id || ""}">Export diagnostics</button></div><section class="panel event-list">${events.length ? events.map((e) => `<details ${e.level === "error" ? "open" : ""}><summary><span class="event-time">${escape(e.time.replace("T", " ").replace("Z", " UTC"))}</span><span class="event-title">${escape(e.title)}<span class="sub">${escape(e.source)} · ${escape(e.id)}</span></span><span class="badge ${e.level === "error" ? "error" : ""}">${e.level === "error" ? "Error" : "Info"}</span></summary><pre>${escape(JSON.stringify(e.details, null, 2))}</pre></details>`).join("") : '<div class="pad">No events recorded.</div>'}</section>`;
 }
 function taskTabs(id, view) {
@@ -422,11 +422,9 @@ function task(id, view) {
     }`
   );
 }
-function settings(view) {
-  if (view === "events")
-    return back("settings", "Settings") + heading("Events", "") + eventView();
+function settings() {
   return (
-    heading("Settings", "", link("settings/events", "Events")) +
+    heading("Settings", "") +
     `<div class="narrow"><section class="panel"><div class="panel-title"><h2>Agent connections</h2></div><div class="pad">${kv("Public endpoint", "https://bridge.example/mcp")}</div></section></div>`
   );
 }
@@ -462,9 +460,11 @@ function render() {
           ? id
             ? task(id, tab)
             : tasks()
-          : area === "settings"
-            ? settings(id)
-            : missing();
+          : area === "events"
+            ? heading("Events", "") + eventView()
+            : area === "settings"
+              ? settings()
+              : missing();
   document.title = `${main.querySelector("h1")?.textContent || "AgentWay"} · Design preview`;
 }
 window.addEventListener("hashchange", () => {

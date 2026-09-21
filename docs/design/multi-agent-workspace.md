@@ -17,18 +17,19 @@ The whole application must answer: which agent can do what, through which accoun
 
 ## Information architecture
 
-Four primary destinations, one sidebar, one wordmark. No overview dashboard, duplicate activity feed, slogan panel, ambient “Live/Local” badges or decorative metrics.
+Five primary destinations, one sidebar, one wordmark. No overview dashboard, duplicate activity feed, slogan panel, ambient “Live/Local” badges or decorative metrics.
 
 | Area         | Primary question                         | Contents                                                                                                   | Primary action                       |
 | ------------ | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------ |
 | Agents       | Which of my agents can use AgentWay?     | Independently connected agents, authentication, permissions, task delivery and shared allowance accounts   | Connect agent                        |
 | Destinations | Where may they publish?                  | Named social accounts/channels and podcast feeds, supported formats, permissions and connection issues     | Connect destination                  |
 | Tasks        | What is happening and what needs action? | Actual agent-requested operations and delegations, related attempts, artifacts and per-destination results | Contextual recovery, not “Save task” |
-| Settings     | How is this installation configured?     | Reachability, storage/retention, backup, deployment access and diagnostics                                 | Contextual settings actions          |
+| Events       | What happened, and why?                  | Cross-task event chains, connection failures and correlated errors                                         | Filter events and export diagnostics |
+| Settings     | How is this installation configured?     | Reachability, storage/retention, backup, deployment access                                                 | Contextual settings actions          |
 
 Agents is the first-use landing page. After setup, Tasks is the default when opening the root route; bookmarked/deep-linked routes always win. Connections can be made in either order. Do not require a manager or backup before a simple upload. A single publishing agent is a complete useful configuration.
 
-Agents owns agent endpoint/authorization instructions. Destinations owns YouTube OAuth and publishing defaults. Tasks exclusively owns execution history. Settings owns external URL/tunnel details. These responsibilities replace the ambiguous Publishing screen deliberately, in a later implementation slice; do not silently move controls during unrelated fixes.
+Agents owns agent endpoint/authorization instructions. Destinations owns YouTube OAuth and publishing defaults. Tasks owns task outcomes and task-scoped event chains; Events owns the cross-task operational journal. Settings owns external URL/tunnel details. These responsibilities replace the ambiguous Publishing screen deliberately, in a later implementation slice; do not silently move controls during unrelated fixes.
 
 Stable URLs: /agents, /agents/:id, /agents/connect; /destinations, /destinations/:id; /tasks?state=attention&agent=:id, /tasks/:id; /settings/connections. Hash routing may encode the same hierarchy for local packaging. Production uses TanStack Router with typed route/search state. Refresh, Back/Forward, middle-click and copied links must work. Dialog steps and details have routes; closing returns to the prior filtered list and scroll position. Use real navigation links, not clickable nonsemantic rows.
 
@@ -93,7 +94,7 @@ Approval UI exists only when required by an owner policy or provider. Healthy pr
 
 ## Events and troubleshooting
 
-Task detail includes an **Events** tab for the full observed execution chain. Settings → Events is the installation-wide entry point, including enrollment, OAuth callbacks, authentication rejection, tunnel/reachability, worker startup, storage and database failures that precede task creation. Agent and destination details link into this same journal with resource filters; do not create disconnected log views.
+Task detail includes an **Events** tab for the full observed execution chain. Events in the main navigation is the installation-wide entry point, including enrollment, OAuth callbacks, authentication rejection, tunnel/reachability, worker startup, storage and database failures that precede task creation. Agent and destination details link into this same journal with resource filters; do not create disconnected log views.
 
 Capture request receipt, authentication and grant decisions, validation, admission, delegation dispatch/acknowledgment, allowance waits, artifact transfer, queue transitions, each provider operation, processing observations, verification, failures, retries, cancellation and recovery. Preserve each attempt and its causal links; retry success never erases the original error. Client-visible tasks are scoped to the principal; installation diagnostics are owner-only.
 

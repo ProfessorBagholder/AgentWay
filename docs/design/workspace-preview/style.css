@@ -579,3 +579,10 @@ th {
     width: calc(100% - 35px);
   }
 }
+
+@media (max-width: 620px) {
+  nav {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+}
