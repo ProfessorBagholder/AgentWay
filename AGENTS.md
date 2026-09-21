@@ -14,5 +14,5 @@
 - See `docs/design/` for intended product scope; `docs/STATUS.md` distinguishes implemented behavior from plans.
 
 - UI copy must serve an immediate user decision, status or recovery action. Do not place design rationale, implementation commentary, slogans, obvious feature explanations or redundant instructional footers anywhere in the app. Keep those in design documents or conversation. This applies to prototypes too: no preview/disclaimer banners or repeated explanatory notices in the UI. Put artifact limitations in the README or delivery message.
-- Do not render empty tiles or feature placeholders for planned functionality. A section must contain useful information or a usable action; keep future feature plans in design documents.
+- Do not render empty tiles or feature placeholders for planned functionality. A section must contain useful information or a usable action; keep future feature plans in design documents. This includes planned-connector tables, coming-soon catalogs and unavailable-feature cards. Audit all screens against this rule before presenting UI changes.
 - Responsive layouts must retain meaningful fields and actions. Reflow into labelled rows or cards instead of hiding columns at smaller widths. Distinguish destination account connection status from agents’ permissions to use that account.

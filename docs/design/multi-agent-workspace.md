@@ -91,6 +91,26 @@ Recovery belongs next to the failure: retry a recoverable transfer, reconnect on
 
 Approval UI exists only when required by an owner policy or provider. Healthy pre-authorized publishing runs without a new dashboard confirmation for every action. No generic safety modal for every normal operation.
 
+## Events and troubleshooting
+
+Task detail includes an **Events** tab for the full observed execution chain. Settings → Events is the installation-wide entry point, including enrollment, OAuth callbacks, authentication rejection, tunnel/reachability, worker startup, storage and database failures that precede task creation. Agent and destination details link into this same journal with resource filters; do not create disconnected log views.
+
+Capture request receipt, authentication and grant decisions, validation, admission, delegation dispatch/acknowledgment, allowance waits, artifact transfer, queue transitions, each provider operation, processing observations, verification, failures, retries, cancellation and recovery. Preserve each attempt and its causal links; retry success never erases the original error. Client-visible tasks are scoped to the principal; installation diagnostics are owner-only.
+
+Each structured event has a stable ID, durable sequence, occurred_at and recorded_at, severity, source/component, operation, trace/span/parent IDs, request/task/parent-task/attempt IDs and relevant principal/destination references. Show durations, HTTP status, provider error code, sanitized message/cause chain and actionable recovery when available. Logs and UI share correlation IDs. Use Rust tracing and standard OpenTelemetry propagation where supported, alongside a persisted SQLite event journal; standard telemetry alone is not durable task history. Server warnings/errors must reach the journal or a correlated diagnostic record, not only terminal output.
+
+Agent-originated steps must be explicitly reported or observed; do not fabricate the internal reasoning or unseen actions of a remote agent. Mark trace boundaries and missing observations when a provider offers no telemetry. Track delegation receipt, worker result and exhaustion separately. Do not describe a trace as complete when evidence is missing.
+
+Default to chronological events for the selected task, with causal nesting for delegation and parallel operations. Offer errors/warnings, source, attempt and time filters, plus search by error text or correlation ID. Errors are expandable in place; display details and export/copy controls without forcing a terminal visit. A full-chain export includes filtered-out events and child attempts within the owner's requested scope; label time range and truncation. Deep links identify the exact event and preserve filter context.
+
+Persist state changes and their event/outbox records transactionally. Use bounded async collection, indexed pagination and revisioned SSE for only the active subscription. Never rebuild the whole screen or collapse open error details on new events. Auto-follow is optional; scrolling back preserves position and offers a new-events indicator. Retention gaps and dropped records are explicit. Keep meaningful transition/error events without storing every byte/chunk as a separate row.
+
+Redact before persistence and export, using allowlisted provider-response fields. Exclude Authorization headers, OAuth codes, cookies, refresh/access tokens, API keys, signed URLs, resumable session URLs, raw prompts, media and unrestricted request/response bodies. Preserve useful sanitized stack/cause context for internal failures; escape external messages as text. A provider message may contain secrets even when its field name looks harmless. Audit exports and apply owner access checks without leaking diagnostics through agent tools or public endpoints.
+
+When the database or event sink itself fails, retain a bounded sanitized fallback log and expose journal health once management access recovers. A stopped server cannot display its own UI; the launcher must report startup failures and the local diagnostic file location. Document this limit instead of implying that all outages are observable from the app.
+
+Acceptance: one failed provider operation is traceable from the originating request through every attempt; delegation parent/child chains are navigable; a retry preserves errors and the original publication ID; pre-task auth failures appear in installation events; reconnect/restart preserves history; sentinel secrets never appear in storage, UI or exports; pagination/SSE gaps are visible; UI filters and exports remain scoped; only affected rows update. Fake event fixtures validate the design, not production logging coverage.
+
 ## Delegation and allowance-aware operation
 
 Delegation configuration lives in the manager agent's Access detail, not a duplicate “team builder”. Select allowed worker agents, permitted execution presets, task/context scope and optional fallback. Any agent can be a manager, worker or both in a particular task. Display “Coordinates tasks” only if configured, not as a provider-defined identity.

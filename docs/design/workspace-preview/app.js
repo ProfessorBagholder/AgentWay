@@ -136,7 +136,7 @@ function catalog() {
   return (
     back("destinations", "Destinations") +
     heading("Connect a destination", "") +
-    `<section class="panel"><div class="pad"><h2>YouTube</h2><button data-action="destination-demo">Preview account enrollment</button></div></section><section class="panel"><div class="panel-title"><h2>Planned connectors</h2></div><div class="pad">${["Instagram · Reels", "TikTok · Video", "Facebook · Reels and video", "X · Video posts", "Podcast feeds · Audio episodes"].map((s) => kv(s, "Not available in this preview")).join("")}</div></section>`
+    `<section class="panel"><div class="pad"><h2>YouTube</h2><button data-action="destination-demo">Preview account enrollment</button></div></section>`
   );
 }
 function tasks() {
@@ -159,7 +159,222 @@ function tasks() {
       )}</div><section class="panel">${f !== "complete" || retryDone ? `<div class="row"><div><a href="#/tasks/episode"><strong>Publish Episode 12 teaser</strong></a><span class="sub">Podcast coordinator · Muse</span></div><div>${badge(retryDone ? "Complete" : "Needs attention")}<span class="sub">${retryDone ? "Completed" : "YouTube published · follow-up failed"}</span></div><div>Today, 10:42<span class="sub">Publishing</span></div><a href="#/tasks/episode" aria-label="Open teaser task">→</a></div>` : ""}${f !== "attention" ? `<div class="row"><div><a href="#/tasks/test"><strong>AgentWay public upload test</strong></a><span class="sub">Podcast coordinator · Muse</span></div><div>${badge("Complete")}<span class="sub">Public visibility verified</span></div><div>Yesterday<span class="sub">YouTube</span></div><a href="#/tasks/test" aria-label="Open upload task">→</a></div>` : ""}</section>`
   );
 }
-function task(id, settings) {
+// Review fixtures only; production events come from the durable event journal.
+const publicationEvents = [
+  {
+    id: "evt-101",
+    time: "2026-09-21T16:42:00.000Z",
+    level: "info",
+    source: "Muse",
+    title: "Publish request received",
+    details: {
+      trace_id: "trace-episode-12",
+      request_id: "req-episode-12",
+      task_id: "episode",
+      operation: "publish_youtube",
+      destination: "Professor Bagholder",
+      transport: "HTTP",
+    },
+  },
+  {
+    id: "evt-102",
+    time: "2026-09-21T16:42:00.020Z",
+    level: "info",
+    source: "AgentWay",
+    title: "Permissions and video settings validated",
+    details: {
+      trace_id: "trace-episode-12",
+      parent_event_id: "evt-101",
+      principal: "Podcast coordinator",
+      made_for_kids: false,
+      contains_synthetic_media: true,
+      requested_privacy: "public",
+    },
+  },
+  {
+    id: "evt-103",
+    time: "2026-09-21T16:42:00.035Z",
+    level: "info",
+    source: "AgentWay",
+    title: "Upload queued",
+    details: {
+      trace_id: "trace-episode-12",
+      parent_event_id: "evt-102",
+      attempt_id: "upload-1",
+      media_id: "media-teaser-12",
+    },
+  },
+  {
+    id: "evt-104",
+    time: "2026-09-21T16:42:01.000Z",
+    level: "info",
+    source: "YouTube",
+    title: "Resumable upload started",
+    details: {
+      trace_id: "trace-episode-12",
+      parent_event_id: "evt-103",
+      attempt_id: "upload-1",
+      operation: "videos.insert",
+      http_status: 200,
+    },
+  },
+  {
+    id: "evt-105",
+    time: "2026-09-21T16:43:00.000Z",
+    level: "info",
+    source: "YouTube",
+    title: "Video upload completed",
+    details: {
+      trace_id: "trace-episode-12",
+      parent_event_id: "evt-104",
+      attempt_id: "upload-1",
+      video_id: "example-video-12",
+      http_status: 200,
+    },
+  },
+  {
+    id: "evt-106",
+    time: "2026-09-21T16:43:04.000Z",
+    level: "info",
+    source: "YouTube",
+    title: "Video processing completed",
+    details: {
+      trace_id: "trace-episode-12",
+      parent_event_id: "evt-105",
+      processing_status: "succeeded",
+    },
+  },
+  {
+    id: "evt-107",
+    time: "2026-09-21T16:44:00.000Z",
+    level: "info",
+    source: "YouTube",
+    title: "Visibility and disclosures verified",
+    details: {
+      trace_id: "trace-episode-12",
+      parent_event_id: "evt-106",
+      privacy: "public",
+      made_for_kids: false,
+      contains_synthetic_media: true,
+    },
+  },
+  {
+    id: "evt-108",
+    time: "2026-09-21T16:44:01.000Z",
+    level: "info",
+    source: "AgentWay",
+    title: "Caption upload started",
+    details: {
+      trace_id: "trace-episode-12",
+      parent_event_id: "evt-107",
+      attempt_id: "captions-1",
+      operation: "captions.insert",
+    },
+  },
+  {
+    id: "evt-109",
+    time: "2026-09-21T16:44:01.450Z",
+    level: "error",
+    source: "YouTube",
+    title: "Caption upload failed",
+    details: {
+      trace_id: "trace-episode-12",
+      parent_event_id: "evt-108",
+      attempt_id: "captions-1",
+      operation: "captions.insert",
+      http_status: 503,
+      provider_code: "backendError",
+      message: "The service is temporarily unavailable.",
+      retryable: true,
+      duration_ms: 450,
+      next_action: "Retry captions on the existing video.",
+      publication_state: "published",
+    },
+  },
+];
+const connectionEvents = [
+  {
+    id: "evt-201",
+    time: "2026-09-21T16:46:00.000Z",
+    level: "error",
+    source: "AgentWay",
+    title: "Agent request rejected",
+    details: {
+      trace_id: "trace-auth-21",
+      operation: "GET /v1/status",
+      http_status: 401,
+      code: "credential_expired",
+      principal: "Market research",
+      task_id: null,
+      next_action: "Reconnect Market research.",
+    },
+  },
+];
+function taskEvents(id) {
+  if (id !== "episode") return [];
+  return [
+    ...publicationEvents,
+    ...(retryDone
+      ? [
+          {
+            id: "evt-110",
+            time: "2026-09-21T16:45:00.000Z",
+            level: "info",
+            source: "AgentWay",
+            title: "Caption retry started",
+            details: {
+              trace_id: "trace-episode-12",
+              parent_event_id: "evt-109",
+              attempt_id: "captions-2",
+              video_id: "example-video-12",
+            },
+          },
+          {
+            id: "evt-111",
+            time: "2026-09-21T16:45:01.000Z",
+            level: "info",
+            source: "YouTube",
+            title: "Captions attached",
+            details: {
+              trace_id: "trace-episode-12",
+              parent_event_id: "evt-110",
+              attempt_id: "captions-2",
+              http_status: 200,
+            },
+          },
+        ]
+      : []),
+  ];
+}
+function eventView(id) {
+  const params = new URLSearchParams(location.hash.split("?")[1] || "");
+  const errors = params.get("level") === "error";
+  const all = id
+    ? taskEvents(id)
+    : [...taskEvents("episode"), ...connectionEvents].sort((a, b) =>
+        a.time.localeCompare(b.time),
+      );
+  const events = all.filter((e) => !errors || e.level === "error");
+  const route = id ? `tasks/${id}/events` : "settings/events";
+  return `<div class="split event-controls"><div class="toolbar"><a class="${!errors ? "selected" : ""}" href="#/${route}">All events</a><a class="${errors ? "selected" : ""}" href="#/${route}?level=error">Errors</a></div><button data-action="export-events" data-task="${id || ""}">Export diagnostics</button></div><section class="panel event-list">${events.length ? events.map((e) => `<details ${e.level === "error" ? "open" : ""}><summary><span class="event-time">${escape(e.time.replace("T", " ").replace("Z", " UTC"))}</span><span class="event-title">${escape(e.title)}<span class="sub">${escape(e.source)} · ${escape(e.id)}</span></span><span class="badge ${e.level === "error" ? "error" : ""}">${e.level === "error" ? "Error" : "Info"}</span></summary><pre>${escape(JSON.stringify(e.details, null, 2))}</pre></details>`).join("") : '<div class="pad">No events recorded.</div>'}</section>`;
+}
+function taskTabs(id, view) {
+  return `<div class="toolbar"><a class="${!view ? "selected" : ""}" href="#/tasks/${id}">Progress</a>${id === "episode" ? `<a class="${view === "settings" ? "selected" : ""}" href="#/tasks/${id}/settings">Video settings</a>` : ""}<a class="${view === "events" ? "selected" : ""}" href="#/tasks/${id}/events">Events</a></div>`;
+}
+function task(id, view) {
+  const settings = view === "settings";
+  if (view === "events")
+    return (
+      back("tasks", "Tasks") +
+      heading(
+        id === "episode"
+          ? "Publish Episode 12 teaser"
+          : "AgentWay public upload test",
+        "",
+      ) +
+      taskTabs(id, view) +
+      eventView(id)
+    );
   if (id === "test")
     return (
       back("tasks", "Tasks") +
@@ -168,7 +383,7 @@ function task(id, settings) {
         "Podcast coordinator · Muse",
         badge("Complete"),
       ) +
-      `<section class="panel"><div class="pad">${kv("Destination", "Professor Bagholder · YouTube")}${kv("Requested visibility", "Public")}${kv("Observed visibility", "Public")}${kv("Disclosure verification", "Not checked")}</div></section>`
+      `${taskTabs(id, view)}<section class="panel"><div class="pad">${kv("Destination", "Professor Bagholder · YouTube")}${kv("Requested visibility", "Public")}${kv("Observed visibility", "Public")}${kv("Disclosure verification", "Not checked")}</div></section>`
     );
   return (
     back("tasks", "Tasks") +
@@ -177,7 +392,7 @@ function task(id, settings) {
       "Requested by Podcast coordinator · Muse",
       badge(retryDone ? "Complete" : "Needs attention"),
     ) +
-    `<div class="toolbar"><a class="${!settings ? "selected" : ""}" href="#/tasks/episode">Progress</a><a class="${settings ? "selected" : ""}" href="#/tasks/episode/settings">Video settings</a></div>${
+    `${taskTabs(id, view)}${
       settings
         ? `<section class="panel"><div class="panel-title"><h2>Video settings</h2></div><div class="pad table-wrap"><table><thead><tr><th>Setting</th><th>Effective request</th><th>Provider result</th></tr></thead><tbody>${[
             ["Visibility", "Public", "Public · verified"],
@@ -207,9 +422,11 @@ function task(id, settings) {
     }`
   );
 }
-function settings() {
+function settings(view) {
+  if (view === "events")
+    return back("settings", "Settings") + heading("Events", "") + eventView();
   return (
-    heading("Settings", "") +
+    heading("Settings", "", link("settings/events", "Events")) +
     `<div class="narrow"><section class="panel"><div class="panel-title"><h2>Agent connections</h2></div><div class="pad">${kv("Public endpoint", "https://bridge.example/mcp")}</div></section></div>`
   );
 }
@@ -243,10 +460,10 @@ function render() {
             : destinations()
         : area === "tasks"
           ? id
-            ? task(id, tab === "settings")
+            ? task(id, tab)
             : tasks()
           : area === "settings"
-            ? settings()
+            ? settings(id)
             : missing();
   document.title = `${main.querySelector("h1")?.textContent || "AgentWay"} · Design preview`;
 }
@@ -262,6 +479,21 @@ main.addEventListener("click", (e) => {
     a.state = a.state === "Paused" ? "Authorized" : "Paused";
     render();
     notice(`${a.name}: ${a.state.toLowerCase()} in preview only.`);
+  }
+  if (b.dataset.action === "export-events") {
+    const events = b.dataset.task
+      ? taskEvents(b.dataset.task)
+      : [...taskEvents("episode"), ...connectionEvents];
+    const blob = new Blob(
+      [JSON.stringify({ source: "design-fixture", events }, null, 2)],
+      { type: "application/json" },
+    );
+    const url = URL.createObjectURL(blob);
+    const download = document.createElement("a");
+    download.href = url;
+    download.download = "agentway-diagnostics.json";
+    download.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   if (b.dataset.action === "save-access") {
     a.access = document.querySelector("#publish").checked;
