@@ -4,10 +4,14 @@ test("saves an agent and task, updates a second window without reloading or refe
   context,
 }) => {
   await page.goto("/");
-  await expect(page.locator(".instance")).toHaveText(/Live/);
+  await expect(
+    page.getByRole("button", { name: "Add agent", exact: true }),
+  ).toBeEnabled();
   const other = await context.newPage();
   await other.goto("/");
-  await expect(other.locator(".instance")).toHaveText(/Live/);
+  await expect(
+    other.getByRole("button", { name: "Add agent", exact: true }),
+  ).toBeEnabled();
   const reads: string[] = [];
   const documents: string[] = [];
   other.on("request", (r) => {
@@ -20,22 +24,24 @@ test("saves an agent and task, updates a second window without reloading or refe
     if (r.isNavigationRequest()) documents.push(r.url());
   });
   const name = `Coordinator ${Date.now()}`;
-  await page
-    .getByRole("button", { name: "Register agent", exact: true })
-    .click();
+  await page.getByRole("button", { name: "Add agent", exact: true }).click();
   await page.getByLabel("Agent name").fill(name);
   await page
     .getByRole("dialog")
-    .getByRole("button", { name: "Register agent", exact: true })
+    .getByRole("button", { name: "Add agent", exact: true })
     .click();
   await expect(other.getByText(name, { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Tasks", exact: true }).click();
-  await page.getByRole("button", { name: "Create task", exact: true }).click();
+  await other.getByRole("button", { name: "Tasks", exact: true }).click();
+  await page.getByRole("button", { name: "Save task", exact: true }).click();
   const title = `Captions ${Date.now()}`;
   await page.getByLabel("Title", { exact: true }).fill(title);
   await page.getByLabel("Assign to").selectOption({ label: name });
   await page.getByLabel("Instructions").fill("Create three short captions.");
-  await page.getByRole("button", { name: "Save assignment" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Save task" })
+    .click();
   await expect(other.getByText(title, { exact: true })).toBeVisible();
   await other.getByRole("button", { name: "Tasks", exact: true }).click();
   await page
