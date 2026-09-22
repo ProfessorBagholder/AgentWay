@@ -87,6 +87,7 @@ impl Publisher {
             .route("/v1/publications/{id}", get(publication))
             .route("/v1/publications/{id}/youtube", get(video_status))
             .route("/v1/publications/{id}/visibility", post(set_visibility))
+            .route("/v1/publications/{id}/delete", post(delete_replaced_video))
             .route("/v1/publications/{id}/operations", get(video_operations))
             .route("/v1/video-operations/{id}", get(video_operation))
             .route("/v1/publications/{id}/retry", post(retry))
@@ -459,4 +460,12 @@ async fn video_operation(
     Path(id): Path<String>,
 ) -> Api<VideoOperation> {
     Ok(Json(p.video_operation(&id).await?))
+}
+
+async fn delete_replaced_video(
+    State(p): State<Publisher>,
+    Path(id): Path<String>,
+    Json(input): Json<DeleteInput>,
+) -> Api<VideoOperation> {
+    Ok(Json(p.delete_replaced_video(&id, input).await?))
 }

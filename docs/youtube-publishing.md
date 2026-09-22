@@ -142,7 +142,7 @@ A 401 with `AgentWay bearer token required` does not distinguish an absent heade
 The Bearer scheme is case-insensitive; the credential remains case-sensitive. Use the same existing credential in the agent connector's secure credential store. Do not rotate it merely because a request returned 401. Compare an authenticated local request with the public endpoint, then the real agent, to distinguish connector configuration from ingress or server failures.
 
 
-### Correcting published videos (guidance version 3)
+### Correcting published videos (guidance version 4)
 
 Existing YouTube connections need one additional consent: Platforms → YouTube → Authorize video management. This requests `youtube.force-ssl`, required by `videos.update`; it does not rotate AgentWay's bearer token. The status endpoint reports `video_management_authorized`. Existing uploads/readback continue with their original authorization. Select the same channel during consent.
 
@@ -160,6 +160,15 @@ The agent validates corrected content, uploads it privately with notifications d
 
 Visibility intent is stored before calling YouTube; completion/error and its event are committed together. A response may have HTTP 200 while the operation is `interrupted`: agents must inspect status/error. Repeat the same request ID and input to reconcile uncertain results. A completed operation returns its recorded outcome without reapplying it; a newer operation prevents an unfinished older request from reverting it. Read the video endpoint for current state. The original publication request remains immutable; its requested privacy is the upload-time choice, not a post-upload visibility target.
 
-Whole-part YouTube status updates preserve documented writable status fields. Scheduled-video changes are rejected rather than silently removing schedules. Provider failure details are sanitized. The source/replacement switch is not atomic across YouTube videos; temporary overlap is possible, and failed retirement must be retried. No delete, in-place media replacement, content rendering or quality assessment is performed by AgentWay. Agents remain responsible for batch coordination and content validation. Operation history is exposed over HTTP/MCP and in the management history response; rendering those additional records in the Activity log UI is not implemented in this change.
+Whole-part YouTube status updates preserve documented writable status fields. Scheduled-video changes are rejected rather than silently removing schedules. Provider failure details are sanitized. The source/replacement switch is not atomic across YouTube videos; temporary overlap is possible, and failed retirement must be retried. No in-place media replacement, content rendering or quality assessment is performed by AgentWay. Agents remain responsible for batch coordination and content validation. Operation history is exposed over HTTP/MCP and in the management history response; rendering those additional records in the Activity log UI is not implemented in this change.
 
 References: [YouTube videos.update](https://developers.google.com/youtube/v3/docs/videos/update), [video processing fields](https://developers.google.com/youtube/v3/docs/videos#processingDetails).
+
+
+### Permanent cleanup of corrected originals
+
+With the user's authorization to remove faulty originals, agents call `POST /v1/publications/{original_id}/delete` (MCP `delete_replaced_youtube_video`, additionally taking `id`) with `request_id` (stable UUID), `replacement_id` and `confirm_delete: true`. The original must already be private. Both tracked videos must belong to the connected channel, differ, and the replacement must be processed and public. Existing video-management consent is sufficient; no new scope or token rotation is required.
+
+The operation is stored as action=delete in existing operation history. Deletion intent and an ownership-checked attempt are persisted before the provider DELETE. HTTP 204 confirms deletion. On an uncertain response, retry the same operation: an absent video after the recorded attempt resolves it, while absence before an attempt, lookup errors, revoked access and malformed responses do not count as success. Deletion marking (`publications.deleted_at`), the completed operation and events commit atomically. Upload history is retained for audit; the faulty video is removed from YouTube. New visibility operations cannot target a deleted video. No videos are deleted by deployment or testing.
+
+The original/replacement association comes from the agent; AgentWay verifies platform state and ownership, not semantic equivalence of their content. [YouTube videos.delete](https://developers.google.com/youtube/v3/docs/videos/delete).

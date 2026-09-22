@@ -374,6 +374,7 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
             .any(|t| t["name"] == "publish_youtube")
     );
     for name in [
+        "delete_replaced_youtube_video",
         "list_publications",
         "get_youtube_video",
         "set_youtube_visibility",
@@ -1093,5 +1094,187 @@ async fn video_correction_reconciles_failures_preserves_settings_and_guards_reti
         "completed"
     );
     assert_eq!(restarted.secret("agent_token").await.unwrap(), token_before);
+    server.abort();
+}
+
+#[tokio::test]
+async fn deletion_requires_authorization_and_replacement_and_recovers_lost_response() {
+    use axum::routing::get;
+    use std::sync::atomic::AtomicBool;
+    let (_dir, mut p) = fixture().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let present = Arc::new(AtomicBool::new(true));
+    let ready = Arc::new(AtomicBool::new(false));
+    let delete_count = Arc::new(AtomicUsize::new(0));
+    let get_present = present.clone();
+    let get_ready = ready.clone();
+    let del_present = present.clone();
+    let del_count = delete_count.clone();
+    let mock=Router::new().route("/token",post(||async {Json(json!({"access_token":"access","token_type":"Bearer","expires_in":3600}))}))
+        .route("/videos",get(move |axum::extract::Query(q):axum::extract::Query<std::collections::HashMap<String,String>>| {
+            let present=get_present.clone();let ready=get_ready.clone();async move {
+                let video=&q["id"];
+                if video.starts_with("old") && !present.load(Ordering::SeqCst) { return Json(json!({"items":[]})); }
+                Json(json!({"items":[{"id":video,"snippet":{"channelId":"channel"},"status":{"privacyStatus":if video.starts_with("old") {"private"} else {"public"},"uploadStatus":"processed"},"processingDetails":{"processingStatus":if ready.load(Ordering::SeqCst){"succeeded"}else{"processing"}}}]}))
+            }
+        }).delete(move |axum::extract::Query(q):axum::extract::Query<std::collections::HashMap<String,String>>| {
+            let present=del_present.clone();let count=del_count.clone();async move {
+                assert!(q["id"].starts_with("old"));
+                present.store(false,Ordering::SeqCst);
+                let n=count.fetch_add(1,Ordering::SeqCst);
+                if n==0 {StatusCode::SERVICE_UNAVAILABLE} else {StatusCode::NO_CONTENT}
+            }
+        }));
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    Arc::get_mut(&mut p.0).unwrap().endpoints.token = format!("{base}/token");
+    Arc::get_mut(&mut p.0).unwrap().endpoints.videos = format!("{base}/videos");
+    account(&p).await;
+    let m = media(&p).await;
+    let old = p.enqueue(input(m.clone())).await.unwrap();
+    let new = p.enqueue(input(m)).await.unwrap();
+    for (id, video) in [(&old.id, "old"), (&new.id, "new")] {
+        sqlx::query("UPDATE publications SET status='uploaded',video_id=? WHERE id=?")
+            .bind(video)
+            .bind(id)
+            .execute(&p.0.db)
+            .await
+            .unwrap();
+    }
+    let mut request = DeleteInput {
+        request_id: Uuid::new_v4().to_string(),
+        replacement_id: new.id.clone(),
+        confirm_delete: false,
+    };
+    assert!(
+        p.delete_replaced_video(&old.id, request.clone())
+            .await
+            .is_err()
+    );
+    request.confirm_delete = true;
+    assert!(
+        p.delete_replaced_video(&old.id, request.clone())
+            .await
+            .is_err()
+    ); // no management consent
+    p.set("youtube_manage_channel", "channel").await.unwrap();
+    let path = format!("/v1/publications/{}/delete", old.id);
+    assert_eq!(
+        call(
+            &p,
+            "POST",
+            &path,
+            serde_json::to_vec(&request).unwrap(),
+            false
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let mut same = request.clone();
+    same.replacement_id = old.id.clone();
+    assert!(p.delete_replaced_video(&old.id, same).await.is_err());
+    p.set("publish_enabled", "false").await.unwrap();
+    assert!(
+        p.delete_replaced_video(&old.id, request.clone())
+            .await
+            .is_err()
+    );
+    p.set("publish_enabled", "true").await.unwrap();
+    let blocked = p
+        .delete_replaced_video(&old.id, request.clone())
+        .await
+        .unwrap();
+    assert_eq!(blocked.status, "interrupted");
+    assert!(!blocked.provider_attempted);
+    assert_eq!(delete_count.load(Ordering::SeqCst), 0);
+    ready.store(true, Ordering::SeqCst);
+    present.store(false, Ordering::SeqCst);
+    assert_eq!(
+        p.delete_replaced_video(&old.id, request.clone())
+            .await
+            .unwrap()
+            .status,
+        "interrupted"
+    ); // missing before attempt is not success
+    assert_eq!(delete_count.load(Ordering::SeqCst), 0);
+    present.store(true, Ordering::SeqCst);
+    let uncertain = p
+        .delete_replaced_video(&old.id, request.clone())
+        .await
+        .unwrap();
+    assert_eq!(uncertain.status, "interrupted");
+    assert!(uncertain.provider_attempted);
+    assert!(p.publication(&old.id).await.unwrap().deleted_at.is_none());
+    let (_, recovered) = call(
+        &p,
+        "POST",
+        &path,
+        serde_json::to_vec(&request).unwrap(),
+        true,
+    )
+    .await;
+    assert_eq!(recovered["status"], "completed");
+    assert_eq!(recovered["action"], "delete");
+    assert_eq!(delete_count.load(Ordering::SeqCst), 1);
+    assert!(p.publication(&old.id).await.unwrap().deleted_at.is_some());
+    assert_eq!(
+        p.youtube_video_status(&old.id).await.unwrap()["deleted"],
+        true
+    );
+    assert!(p.publication(&new.id).await.unwrap().deleted_at.is_none());
+    assert_eq!(
+        p.delete_replaced_video(&old.id, request.clone())
+            .await
+            .unwrap()
+            .status,
+        "completed"
+    );
+    let mut collision = request.clone();
+    collision.replacement_id = old.id.clone();
+    assert!(p.delete_replaced_video(&new.id, collision).await.is_err());
+    // A separate cleanup exercises YouTube's normal 204 success path.
+    let fresh_media = media(&p).await;
+    let fresh = p.enqueue(input(fresh_media)).await.unwrap();
+    sqlx::query("UPDATE publications SET status='uploaded',video_id='old2' WHERE id=?")
+        .bind(&fresh.id)
+        .execute(&p.0.db)
+        .await
+        .unwrap();
+    present.store(true, Ordering::SeqCst);
+    let direct = p
+        .delete_replaced_video(
+            &fresh.id,
+            DeleteInput {
+                request_id: Uuid::new_v4().to_string(),
+                replacement_id: new.id.clone(),
+                confirm_delete: true,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(direct.status, "completed");
+    assert!(direct.result.unwrap().contains("youtube_204"));
+    assert_eq!(delete_count.load(Ordering::SeqCst), 2);
+    let saved_token = p.secret("agent_token").await.unwrap();
+    p.0.db.close().await;
+    drop(p);
+    let db = crate::database(&format!(
+        "sqlite://{}",
+        _dir.path().join("test.db").display()
+    ))
+    .await
+    .unwrap();
+    let p = Publisher::new(db, _dir.path().join("publishing"), CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        p.delete_replaced_video(&old.id, request)
+            .await
+            .unwrap()
+            .status,
+        "completed"
+    );
+    assert_eq!(p.secret("agent_token").await.unwrap(), saved_token);
     server.abort();
 }

@@ -6,7 +6,7 @@ mod oauth;
 mod tests;
 mod vault;
 mod video;
-use video::{VideoOperation, VisibilityInput};
+use video::{DeleteInput, VideoOperation, VisibilityInput};
 mod worker;
 mod workspace;
 
@@ -58,6 +58,8 @@ impl Default for Endpoints {
 }
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Publication {
+    #[serde(default)]
+    pub deleted_at: Option<String>,
     pub id: String,
     pub title: String,
     pub status: String,
@@ -269,6 +271,10 @@ impl Publisher {
             actual_privacy: None,
             visibility_error: None,
         };
+        if result.publication.deleted_at.is_some() {
+            result.visibility_error = Some("Video was deleted; upload history is retained".into());
+            return Ok(result);
+        }
         if let Some(video) = video {
             match self.video_privacy(&channel, &video).await {
                 Ok(privacy) => result.actual_privacy = Some(privacy),
