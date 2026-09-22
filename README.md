@@ -37,7 +37,7 @@ Data lives in the `agentway_agentway-data` Docker volume and survives rebuilds a
 
 Rust/Tokio + Axum + SQLx/SQLite. React/TypeScript + TanStack Query. Vite runs at build time; Rust serves the compiled frontend and API on one origin. There is no Node server in the running container. Native SQLite event polling is currently bounded at two reads/second per connected browser; browsers do not poll API resources. This simple implementation will gain centralized event fanout and retention before remote deployment. Bootstrap currently loads all locally saved registrations/tasks; pagination is a pre-scale milestone.
 
-Publishing uses the official Rust MCP SDK, oauth2, reqwest and authenticated encryption. See [YouTube setup and Muse connection](docs/youtube-publishing.md) for account setup, HTTPS access, limits and verification status. For a temporary hosted-agent endpoint, use `./run --share`.
+Publishing uses the official Rust MCP SDK, oauth2, reqwest and authenticated encryption. See [YouTube setup and Muse connection](docs/youtube-publishing.md) for account setup, HTTPS access, limits and verification status. For a temporary hosted-agent endpoint, use `./run --share`. With a [named tunnel configured](docs/youtube-publishing.md#stable-named-cloudflare-tunnel), `./run` reuses its stable hostname automatically.
 
 ## Contributing and checks
 

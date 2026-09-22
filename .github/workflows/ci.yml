@@ -16,6 +16,7 @@ jobs:
           node-version: '22.14.0'
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - run: python3 tests/launcher/test_run.py
       - run: cargo fmt --check
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - run: cargo test --locked --workspace

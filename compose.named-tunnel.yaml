@@ -1,0 +1,9 @@
+# Selected automatically by ./run when .agentway/tunnel-{hostname,token} exist.
+services:
+  tunnel:
+    command: tunnel --no-autoupdate run --token-file /run/secrets/tunnel-token
+    restart: unless-stopped
+    user: "${AGENTWAY_TUNNEL_UID:-65532}:${AGENTWAY_TUNNEL_GID:-65532}"
+    read_only: true
+    volumes:
+      - ./.agentway/tunnel-token:/run/secrets/tunnel-token:ro
