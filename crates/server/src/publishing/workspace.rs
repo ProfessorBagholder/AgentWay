@@ -97,7 +97,7 @@ async fn detail(State(p): State<Publisher>, Path(id): Path<String>) -> Api<Value
             .bind(&id)
             .fetch_one(&p.0.db)
             .await?;
-    let input: PublishInput = serde_json::from_str(&input)?;
+    let input = PublishInput::from_saved(&input)?;
     Ok(Json(
         json!({"publication":p.publication(&id).await?,"settings":input,"channel_id":channel}),
     ))

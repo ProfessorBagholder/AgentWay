@@ -79,6 +79,7 @@ fn input(media_id: String) -> PublishInput {
         privacy: "private".into(),
         made_for_kids: false,
         contains_synthetic_media: false,
+        notify_subscribers: true,
     }
 }
 async fn account(p: &Publisher) {
@@ -339,6 +340,11 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
         .unwrap();
     assert!(required.contains(&json!("made_for_kids")));
     assert!(required.contains(&json!("contains_synthetic_media")));
+    assert!(!required.contains(&json!("notify_subscribers")));
+    assert_eq!(
+        status["agent_guidance"]["publish_schema"]["properties"]["notify_subscribers"]["default"],
+        true
+    );
     client
         .post(&url)
         .bearer_auth(&token)
@@ -510,6 +516,22 @@ async fn documented_request_requires_explicit_declarations_and_rejects_unknown_s
     ))
     .unwrap();
     example["media_id"] = json!(media(&p).await);
+    let decoded: PublishInput = serde_json::from_value(example.clone()).unwrap();
+    assert!(decoded.notify_subscribers);
+    let mut invalid = example.clone();
+    invalid["notify_subscribers"] = json!("false");
+    assert_eq!(
+        call(
+            &p,
+            "POST",
+            "/v1/youtube/publish",
+            serde_json::to_vec(&invalid).unwrap(),
+            true
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
     for field in ["made_for_kids", "contains_synthetic_media"] {
         let mut missing = example.clone();
         missing.as_object_mut().unwrap().remove(field);
@@ -573,6 +595,24 @@ async fn documented_request_requires_explicit_declarations_and_rejects_unknown_s
     )
     .await;
     assert_eq!(first["id"], retried["id"]);
+    // Old records omitted the notification field. The same old request still deduplicates.
+    sqlx::query(
+        "UPDATE publications SET input=json_remove(input,'$.notify_subscribers') WHERE id=?",
+    )
+    .bind(first["id"].as_str().unwrap())
+    .execute(&p.0.db)
+    .await
+    .unwrap();
+    let (status, legacy_retry) = call(
+        &p,
+        "POST",
+        "/v1/youtube/publish",
+        serde_json::to_vec(&example).unwrap(),
+        true,
+    )
+    .await;
+    assert!(status.is_success());
+    assert_eq!(first["id"], legacy_retry["id"]);
     example["contains_synthetic_media"] = json!(false);
     assert_eq!(
         call(
@@ -613,8 +653,10 @@ async fn worker_sends_visibility_and_explicit_disclosures_unchanged() {
                     let captured = captured.clone();
                     async move {
                         assert_eq!(query["part"], "snippet,status");
-                        assert_eq!(query["notifySubscribers"], "false");
-                        captured.lock().unwrap().push(body);
+                        captured
+                            .lock()
+                            .unwrap()
+                            .push(json!({"body":body,"notify":query["notifySubscribers"]}));
                         // Stop before transferring bytes; only metadata submission is under test.
                         StatusCode::SERVICE_UNAVAILABLE
                     }
@@ -627,13 +669,31 @@ async fn worker_sends_visibility_and_explicit_disclosures_unchanged() {
     account(&p).await;
     p.set("private_only", "false").await.unwrap();
     let media_id = media(&p).await;
+    let legacy = p.enqueue(input(media_id.clone())).await.unwrap();
+    sqlx::query(
+        "UPDATE publications SET input=json_remove(input,'$.notify_subscribers') WHERE id=?",
+    )
+    .bind(&legacy.id)
+    .execute(&p.0.db)
+    .await
+    .unwrap();
     let worker = p.start_worker();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while p.publication(&legacy.id).await.unwrap().status != "interrupted" {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(captured.lock().unwrap()[0]["notify"], "false");
+    captured.lock().unwrap().clear();
     for privacy in ["private", "unlisted", "public"] {
         for (kids, synthetic) in [(false, false), (false, true), (true, false), (true, true)] {
             let mut request = input(media_id.clone());
             request.privacy = privacy.into();
             request.made_for_kids = kids;
             request.contains_synthetic_media = synthetic;
+            request.notify_subscribers = !kids;
             let job = p.enqueue(request).await.unwrap();
             tokio::time::timeout(Duration::from_secs(5), async {
                 loop {
@@ -645,7 +705,12 @@ async fn worker_sends_visibility_and_explicit_disclosures_unchanged() {
             })
             .await
             .unwrap();
-            let body = captured.lock().unwrap().last().unwrap().clone();
+            let captured_request = captured.lock().unwrap().last().unwrap().clone();
+            assert_eq!(
+                captured_request["notify"],
+                if !kids { "true" } else { "false" }
+            );
+            let body = &captured_request["body"];
             assert_eq!(
                 body["snippet"],
                 json!({"title":"Test video","description":"","categoryId":"24"})

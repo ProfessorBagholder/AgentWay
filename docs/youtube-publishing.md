@@ -93,16 +93,17 @@ Use **Agents → your connection → Connection instructions → Copy instructio
 | privacy | No | private, unlisted or public; defaults to private. Owner policy may reject non-private. |
 | made_for_kids | Yes | Explicit JSON boolean declaring whether the video is child-directed. |
 | contains_synthetic_media | Yes | Explicit JSON boolean for realistic altered/synthetic content disclosure. |
+| notify_subscribers | No | Defaults to true; set false to disable subscriber notifications for this upload. |
 
 YouTube's disclosure guidance distinguishes realistic altered/synthetic content from production assistance such as script drafting. The creating agent determines the appropriate declaration from the content and owner instructions; the bridge transports it. If the agent cannot determine a required declaration, resolve that before submission. See [YouTube guidance](https://support.google.com/youtube/answer/14328491).
 
-**Current limits:** these are the only supported publish fields. Category is fixed to Entertainment (24); subscriber notification is false. No tags, publication scheduling, paid-promotion control, language setting, thumbnail/caption upload, playlist association or metadata editing is exposed yet. Unknown input fields are rejected. A required unsupported setting is a pre-upload capability gap, not permission to omit it. The design specification describes future support, not current functionality.
+**Current limits:** these are the only supported publish fields. Category is fixed to Entertainment (24); subscriber notifications default to on unless explicitly disabled. No tags, publication scheduling, paid-promotion control, language setting, thumbnail/caption upload, playlist association or metadata editing is exposed yet. Unknown input fields are rejected. A required unsupported setting is a pre-upload capability gap, not permission to omit it. The design specification describes future support, not current functionality.
 
 The worker sends audience and synthetic declarations with the initial upload metadata, together with requested visibility. Completion/readback currently verifies visibility only. Do not tell users that declarations were independently read back, processing finished, or Shorts classification was confirmed.
 
 ### Compatibility boundary
 
-The workspace design under docs/design/workspace-preview is isolated from the deployed React app. This contract update does not change the upload schema, endpoint paths, media limits, owner policy, stored request serialization, session recovery, OAuth scope or credentials. Existing Muse requests remain valid. New metadata fields must be introduced in a separately tested change that preserves old persisted inputs and idempotency behavior.
+The workspace design under docs/design/workspace-preview is isolated from the deployed React app. The notification option does not change endpoint paths, media limits, owner policy, session recovery, OAuth scope or credentials. Previously stored jobs retain their original notification behavior; new jobs persist the resolved notification setting. Existing Muse requests remain valid. New metadata fields must be introduced in a separately tested change that preserves old persisted inputs and idempotency behavior.
 
 ### Automatic agent onboarding
 

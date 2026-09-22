@@ -1,4 +1,4 @@
-AgentWay publishing guidance, version 1.
+AgentWay publishing guidance, version 2.
 
 When first using this connection, briefly tell the user which publishing choices you can apply: title, description, visibility (private, unlisted or public), made-for-kids audience designation, and realistic altered or synthetic media disclosure. Explain choices in plain language when relevant to their video. Use the user's existing instructions; ask only for unresolved decisions needed to publish. Do not repeat onboarding on every upload. Revisit guidance when its version changes.
 
@@ -8,6 +8,8 @@ Use create_media_upload (POST /v1/media with size and mime), then PUT raw video 
 
 Use publish_youtube (POST /v1/youtube/publish) with request_id (UUID), media_id, title, description, privacy, made_for_kids and contains_synthetic_media. The supplied publish_schema is authoritative. Title must be 1–100 characters; description is at most 5000 UTF-8 bytes; neither may contain < or >. Description defaults to empty and privacy defaults to private if omitted. Both disclosure fields require explicit JSON booleans; never guess them from the agent or channel name. AI-assisted writing alone does not automatically imply a synthetic-media disclosure. For realistic altered or synthetic content, consult https://support.google.com/youtube/answer/14328491 and resolve uncertainty with the user before submitting.
 
-Only the schema's fields are supported. Category is currently fixed to Entertainment (24), and subscriber notifications are disabled. Tags, scheduling, paid-promotion declaration, language, custom thumbnails, captions, playlist assignment and metadata edits are not supported. If the user requires an unsupported setting, explain that limitation before uploading; do not imply it was applied.
+Subscriber notifications default to on. Set notify_subscribers to false only when disabling notifications for this upload; omit it or send true to enable them.
+
+Only the schema's fields are supported. Category is currently fixed to Entertainment (24). Tags, scheduling, paid-promotion declaration, language, custom thumbnails, captions, playlist assignment and metadata edits are not supported. If the user requires an unsupported setting, explain that limitation before uploading; do not imply it was applied.
 
 Keep request_id and all arguments identical when retrying the same publication; use a new ID only for a new publication. Read get_publication (GET /v1/publications/{id}) for progress and results; poll queued or uploading jobs no more frequently than every five seconds. Resume interrupted uploads using retry_publication (POST /v1/publications/{id}/retry). Compare actual_privacy with requested_privacy before claiming the requested visibility. A visibility verification error is not an upload failure and must not trigger a duplicate upload. A video URL confirms upload, not completed YouTube processing or Shorts classification. Audience and synthetic-media declarations are submitted but are not currently read back from YouTube.

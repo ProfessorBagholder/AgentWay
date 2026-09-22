@@ -99,6 +99,24 @@ pub struct PublishInput {
     /// Required realistic altered/synthetic content declaration. AI script assistance alone is not sufficient.
     /// See https://support.google.com/youtube/answer/14328491.
     pub contains_synthetic_media: bool,
+    /// Notify subscribers about this upload. Defaults to true; set false to disable.
+    #[serde(default = "notifications_enabled")]
+    pub notify_subscribers: bool,
+}
+impl PublishInput {
+    fn from_saved(input: &str) -> Result<Self> {
+        // Previously queued jobs retain their original notification behavior.
+        let mut saved: Value = serde_json::from_str(input)?;
+        saved
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("Invalid stored publication"))?
+            .entry("notify_subscribers")
+            .or_insert(json!(false));
+        Ok(serde_json::from_value(saved)?)
+    }
+}
+fn notifications_enabled() -> bool {
+    true
 }
 fn private() -> String {
     "private".into()
@@ -241,7 +259,7 @@ impl Publisher {
                 .bind(id)
                 .fetch_one(&self.0.db)
                 .await?;
-        let input: PublishInput = serde_json::from_str(&input)?;
+        let input = PublishInput::from_saved(&input)?;
         let mut result = PublicationVerification {
             publication,
             requested_privacy: input.privacy,
@@ -343,7 +361,9 @@ impl Publisher {
                 .fetch_optional(&self.0.db)
                 .await?;
         if let Some((id, original)) = existing {
-            if original != encoded {
+            // Normalize old requests that predate this optional field, preserving retry IDs.
+            let original: PublishInput = serde_json::from_str(&original)?;
+            if serde_json::to_string(&original)? != encoded {
                 bail!(
                     "request_id already belongs to a different upload; reuse the original arguments"
                 );

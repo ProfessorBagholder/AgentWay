@@ -39,7 +39,7 @@ impl Publisher {
                 .bind(id)
                 .fetch_one(&self.0.db)
                 .await?;
-        let input: PublishInput = serde_json::from_str(&input)?;
+        let input = PublishInput::from_saved(&input)?;
         let media: Media = sqlx::query_as("SELECT * FROM media WHERE id=? AND ready=1")
             .bind(&input.media_id)
             .fetch_one(&self.0.db)
@@ -64,7 +64,7 @@ impl Publisher {
             self.check_publish_access().await?;
             let token = self.access_token(&channel).await?;
             let response = self.0.client.post(&self.0.endpoints.upload)
-                .query(&[("uploadType","resumable"),("part","snippet,status"),("notifySubscribers","false")])
+                .query(&[("uploadType","resumable"),("part","snippet,status"),("notifySubscribers",if input.notify_subscribers { "true" } else { "false" })])
                 .bearer_auth(token).header("X-Upload-Content-Length", media.size).header("X-Upload-Content-Type", &media.mime)
                 .json(&json!({"snippet":{"title":input.title,"description":input.description,"categoryId":"24"},"status":{"privacyStatus":input.privacy,"selfDeclaredMadeForKids":input.made_for_kids,"containsSyntheticMedia":input.contains_synthetic_media}}))
                 .send().await.map_err(|_|anyhow::anyhow!("Could not start YouTube upload. Check your network and retry."))?;
