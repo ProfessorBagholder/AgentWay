@@ -91,6 +91,24 @@ impl Publisher {
             .with_state(self.clone())
     }
 }
+/// HTTP authentication schemes are case-insensitive (RFC 9110 §11.1).
+fn bearer_credential(headers: &HeaderMap) -> Result<&str, &'static str> {
+    let mut values = headers.get_all("authorization").iter();
+    let value = values.next().ok_or("authorization_missing")?;
+    if values.next().is_some() {
+        return Err("authorization_multiple");
+    }
+    let value = value.to_str().map_err(|_| "authorization_malformed")?;
+    let (scheme, token) = value.split_once(' ').ok_or("authorization_malformed")?;
+    if !scheme.eq_ignore_ascii_case("Bearer") {
+        return Err("authorization_wrong_scheme");
+    }
+    let token = token.trim_start_matches(' ');
+    if token.is_empty() || token.bytes().any(|b| b.is_ascii_whitespace() || b == b',') {
+        return Err("authorization_malformed");
+    }
+    Ok(token)
+}
 async fn authenticate(State(p): State<Publisher>, req: Request, next: Next) -> Response {
     // Browser cross-origin use is unsupported; this API is for agent HTTP clients.
     if req.headers().contains_key("origin") {
@@ -105,17 +123,33 @@ async fn authenticate(State(p): State<Publisher>, req: Request, next: Next) -> R
     {
         return StatusCode::UNAUTHORIZED.into_response();
     }
-    let actual = req
-        .headers()
-        .get("authorization")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .unwrap_or("");
+    let credential = bearer_credential(req.headers());
     let expected = match p.secret("agent_token").await {
         Ok(s) => s,
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
-    if !bool::from(Sha256::digest(actual.as_bytes()).ct_eq(&Sha256::digest(expected.as_bytes()))) {
+    let failure = match credential {
+        Err(reason) => Some(reason),
+        Ok(actual)
+            if !bool::from(
+                Sha256::digest(actual.as_bytes()).ct_eq(&Sha256::digest(expected.as_bytes())),
+            ) =>
+        {
+            Some("token_mismatch")
+        }
+        Ok(_) => None,
+    };
+    if let Some(reason) = failure {
+        // Bounded diagnostics: never record header values, credentials or request URLs.
+        let mut last = p.0.auth_failure_log.lock().await;
+        if last.is_none_or(|at| at.elapsed() >= Duration::from_secs(5)) {
+            tracing::warn!(
+                reason,
+                "Agent authentication rejected (at most once per 5 seconds)"
+            );
+            *last = Some(std::time::Instant::now());
+        }
+        drop(last);
         return (
             StatusCode::UNAUTHORIZED,
             [("www-authenticate", "Bearer realm=\"AgentWay\"")],

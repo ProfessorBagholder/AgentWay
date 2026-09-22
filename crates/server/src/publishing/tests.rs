@@ -772,3 +772,50 @@ async fn workspace_history_and_settings_are_real_and_management_only() {
         StatusCode::NOT_FOUND
     );
 }
+
+#[tokio::test]
+async fn bearer_scheme_interoperability_and_rejection() {
+    let (_dir, p) = fixture().await;
+    let token = p.secret("agent_token").await.unwrap();
+    for scheme in ["Bearer", "bearer", "BEARER", "bEaReR", "Bearer   "] {
+        let response = p
+            .bridge_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/status")
+                    .header("Authorization", format!("{scheme} {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    for headers in [
+        vec![],
+        vec!["Bearer wrong".to_string()],
+        vec!["Bearer".to_string()],
+        vec![format!("Basic {token}")],
+        vec![format!("Bearer {token}, Bearer {token}")],
+        vec![format!("Bearer {token}"), format!("Bearer {token}")],
+        vec![format!("Bearer {}", token.to_uppercase())],
+    ] {
+        let mut request = Request::builder().uri("/v1/status");
+        for header in headers {
+            request = request.header("authorization", header);
+        }
+        let response = p
+            .bridge_router()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response.headers()["www-authenticate"],
+            "Bearer realm=\"AgentWay\""
+        );
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(!String::from_utf8_lossy(&body).contains(&token));
+    }
+    assert_eq!(p.secret("agent_token").await.unwrap(), token);
+}

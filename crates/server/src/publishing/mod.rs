@@ -30,6 +30,7 @@ struct Inner {
     transfers: Semaphore,
     access_token: Mutex<Option<CachedToken>>,
     mutation: Mutex<()>,
+    auth_failure_log: Mutex<Option<std::time::Instant>>,
     shutdown: CancellationToken,
 }
 struct CachedToken {
@@ -153,6 +154,7 @@ impl Publisher {
             transfers: Semaphore::new(2),
             access_token: Mutex::new(None),
             mutation: Mutex::new(()),
+            auth_failure_log: Mutex::new(None),
             shutdown,
         }));
         if this.setting("agent_token").await?.is_none() {
