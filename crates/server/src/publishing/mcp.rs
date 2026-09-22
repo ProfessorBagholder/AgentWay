@@ -50,7 +50,7 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "Set the connected channel description (up to 1000 characters; empty clears it). Supply channel_id and exact expected_description from get_youtube_channel. Preserves other channel settings and verifies readback. Requires existing management consent. Retry identical inputs after uncertain errors; stale descriptions are rejected. Changes the channel blurb, not video descriptions or channel name."
+        description = "Set the connected channel description (up to 1000 characters; empty clears it). Supply channel_id and exact expected_description from get_youtube_channel. Preserves other channel settings and verifies readback. Requires existing management consent. Accepted writes with delayed readback return status=verification_pending, verified=false; poll get_youtube_channel after five seconds, do not submit another write. Identical retries of pending accepted writes only verify. Stale descriptions are rejected. Changes the channel blurb, not video descriptions or channel name."
     )]
     async fn set_youtube_channel_description(
         &self,

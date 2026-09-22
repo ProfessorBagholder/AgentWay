@@ -1322,7 +1322,14 @@ async fn channel_description_preserves_settings_and_reconciles_uncertain_writes(
                     assert!(body["brandingSettings"].get("image").is_none());
                     let n = count.fetch_add(1, Ordering::SeqCst);
                     // First write applies but the response fails. Third write lies about success.
-                    if n != 2 {
+                    if n == 1 {
+                        // Realistic propagation: first read is stale, later reads converge.
+                        tokio::spawn(async move {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            write.lock().await["brandingSettings"] =
+                                body["brandingSettings"].clone();
+                        });
+                    } else if n != 2 {
                         write.lock().await["brandingSettings"] = body["brandingSettings"].clone();
                     }
                     if n == 0 {
@@ -1382,7 +1389,44 @@ async fn channel_description_preserves_settings_and_reconciles_uncertain_writes(
     );
     input.expected_description = String::new();
     input.description = "not saved".into();
-    assert!(p.set_channel_description(input.clone()).await.is_err()); // success requires readback
+    let pending = call(
+        &p,
+        "POST",
+        "/v1/youtube/channel/description",
+        serde_json::to_vec(&input).unwrap(),
+        true,
+    )
+    .await;
+    assert_eq!(pending.0, StatusCode::ACCEPTED);
+    assert_eq!(pending.1["status"], "verification_pending");
+    assert_eq!(pending.1["verified"], false);
+    assert_eq!(pending.1["write_accepted"], true);
+    assert!(
+        p.setting("channel_description_pending")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let db = p.0.db.clone();
+    let dir = p.0.dir.clone();
+    drop(p);
+    let mut p = Publisher::new(db, dir, CancellationToken::new())
+        .await
+        .unwrap();
+    Arc::get_mut(&mut p.0).unwrap().endpoints.token = format!("{base}/token");
+    Arc::get_mut(&mut p.0).unwrap().endpoints.channels = format!("{base}/channels");
+    assert_eq!(
+        p.set_channel_description(input.clone()).await.unwrap()["status"],
+        "verification_pending"
+    );
+    assert_eq!(writes.load(Ordering::SeqCst), 3); // restart + stale read never repeats the PUT
+    // A later read observes the accepted value; identical retry verifies without a PUT.
+    saved.lock().await["brandingSettings"]["channel"]["description"] = json!(input.description);
+    assert_eq!(
+        p.set_channel_description(input.clone()).await.unwrap()["verified"],
+        true
+    );
+    assert_eq!(writes.load(Ordering::SeqCst), 3);
     input.description = "🦍".repeat(1001);
     assert!(p.set_channel_description(input.clone()).await.is_err());
     assert_eq!(writes.load(Ordering::SeqCst), 3);

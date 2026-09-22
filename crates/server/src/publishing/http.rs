@@ -478,6 +478,12 @@ async fn channel_profile(State(p): State<Publisher>) -> Api<Value> {
 async fn channel_description(
     State(p): State<Publisher>,
     Json(input): Json<ChannelDescriptionInput>,
-) -> Api<Value> {
-    Ok(Json(p.set_channel_description(input).await?))
+) -> Result<Response, Error> {
+    let result = p.set_channel_description(input).await?;
+    let status = if result["status"] == "verification_pending" {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(result)).into_response())
 }

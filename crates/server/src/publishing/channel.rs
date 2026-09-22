@@ -78,6 +78,15 @@ impl Publisher {
         if self.setting("youtube_manage_channel").await?.as_deref() != Some(channel.as_str()) {
             bail!("YouTube management permission required; authorize video management in AgentWay");
         }
+        let accepted = serde_json::to_string(&input)?;
+        if self
+            .setting("channel_description_pending")
+            .await?
+            .as_deref()
+            == Some(accepted.as_str())
+        {
+            return self.verify_channel_description(&input).await;
+        }
         let (token, item) = self.channel_resource(&channel).await?;
         let current = description(&item)?;
         // Also reconciles a successful write whose response was lost, without writing twice.
@@ -119,17 +128,49 @@ impl Publisher {
                 response.status().as_u16()
             );
         }
-        let (_, saved) = self.channel_resource(&channel).await.map_err(|_| {
-            anyhow::anyhow!(
-                "Channel update sent but readback failed; retry identical inputs to verify"
-            )
-        })?;
-        if description(&saved)? != input.description {
-            bail!(
-                "Channel description readback does not match; read current state before retrying"
-            );
+        // Keep accepted writes across retries/restarts: verification must never resend them.
+        self.set("channel_description_pending", &accepted).await?;
+        self.verify_channel_description(&input).await
+    }
+
+    async fn verify_channel_description(&self, input: &ChannelDescriptionInput) -> Result<Value> {
+        let mut last_channel = Value::Null;
+        let mut verification_error = None;
+        // Bound the whole verification phase, including slow provider reads.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+        for delay in [0, 1, 2, 4] {
+            if tokio::time::timeout_at(deadline, tokio::time::sleep(Duration::from_secs(delay)))
+                .await
+                .is_err()
+            {
+                break;
+            }
+            match tokio::time::timeout_at(deadline, self.channel_resource(&input.channel_id)).await
+            {
+                Ok(Ok((_, saved))) => {
+                    if description(&saved)? == input.description {
+                        self.set("channel_description_pending", "").await?;
+                        return Ok(
+                            json!({"status":"completed","verified":true,"channel":channel_projection(&saved)}),
+                        );
+                    }
+                    last_channel = channel_projection(&saved);
+                    verification_error = Some(
+                        "YouTube readback does not yet match the requested description".to_string(),
+                    );
+                }
+                Ok(Err(error)) => verification_error = Some(error.to_string()),
+                Err(_) => {
+                    verification_error = Some("YouTube readback timed out".to_string());
+                    break;
+                }
+            }
         }
-        Ok(json!({"status":"completed","verified":true,"channel":channel_projection(&saved)}))
+        Ok(
+            json!({"status":"verification_pending","write_accepted":true,"verified":false,
+            "channel":last_channel,"verification_error":verification_error,"retry_after_seconds":5,
+            "next_action":"Read get_youtube_channel (GET /v1/youtube/channel) after five seconds and compare the description. Do not submit another write. An identical retry only rechecks this accepted write."}),
+        )
     }
 }
 

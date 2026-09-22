@@ -175,6 +175,8 @@ The original/replacement association comes from the agent; AgentWay verifies pla
 
 ## Channel description
 
-Agents can read `GET /v1/youtube/channel` (`get_youtube_channel` in MCP), then POST `/v1/youtube/channel/description` (`set_youtube_channel_description`) with `channel_id`, `expected_description` and `description`. The expected value must match the last read. The description accepts up to 1000 characters; empty explicitly clears it. Existing `youtube.force-ssl` consent covers this. Guidance version 5 advertises the schema and tools.
+Agents can read `GET /v1/youtube/channel` (`get_youtube_channel` in MCP), then POST `/v1/youtube/channel/description` (`set_youtube_channel_description`) with `channel_id`, `expected_description` and `description`. The expected value must match the last read. The description accepts up to 1000 characters; empty explicitly clears it. Existing `youtube.force-ssl` consent covers this. Guidance version 6 advertises the schema and tools.
 
 Updates preserve the other current channel branding fields and require a fresh YouTube readback before returning `status=completed, verified=true`. Identical retries reconcile an already-applied description without another write. A stale expected description or mismatched channel is rejected. This is a read-before-write guard, not an atomic compare-and-swap with YouTube; simultaneous external Studio edits cannot be fully serialized. Translated descriptions and channel names are outside this operation.
+
+Channel-description verification tolerates delayed reads with bounded backoff. If YouTube accepted the write but matching readback is unavailable, HTTP returns 202 (`verification_pending`, `verified=false`), with recovery guidance; MCP returns the same result. Accepted pending inputs are persisted so identical retries verify without resubmitting. Regression tests simulate delayed propagation and persistent mismatch.

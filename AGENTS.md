@@ -27,3 +27,5 @@
 - Healthy agent details show one Connected badge, editable platform permissions and a secondary Disconnect action. Do not add Pause/Reconnect controls or duplicate authorization rows. Recovery actions appear only for an actual diagnosed connection failure.
 
 - Treat public agent endpoints as machine-to-machine APIs. Deployment must verify representative non-browser clients and required HTTP/MCP operations through the real ingress, not just a browser or default curl request. Browser fingerprint checks, JavaScript/CAPTCHA challenges and incompatible bot rules must not gate the dedicated agent hostname. Scope exceptions to that hostname; retain bearer authentication, applicable WAF/rate limits and management isolation. Do not use one agent's temporary egress-IP allowlist as the general fix or claim all agent products are verified from synthetic probes.
+
+- Release workflow: deploy feature branches for user testing, label them as test deployments. After explicit merge approval, merge, switch to main, rebuild/restart from main, and verify before declaring the app ready for normal use. Testing approval is not merge approval.
