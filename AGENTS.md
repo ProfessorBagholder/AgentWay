@@ -23,3 +23,4 @@
 - Appearance controls belong in Settings → Appearance. Use labelled Light/Dark choices with sun/moon icons, consistent with existing controls; do not add an arbitrary sidebar toggle.
 - Platforms uses Platform, Account, Status and Agents columns; show actual agent names. Platform detail leads with the platform name. Omit format subtitles and speculative publishing-default controls; video settings are supplied through the agent publishing flow.
 - Agents list: show only the short platform label (Muse, Claude, ChatGPT, Grok) in Agent and the status badge in Connection. No secondary text or usage-limit column in this list. Preserve exact product identities internally.
+- Agent detail headings must match the clicked agent label (e.g. Muse), not an invented role. Omit generic account labels, internal transport descriptions and hard-coded activity summaries. Activity must come from the correlated Activity log.

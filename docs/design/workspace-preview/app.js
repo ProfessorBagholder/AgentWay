@@ -94,10 +94,11 @@ function agentList() {
 function agentDetail(id) {
   const a = agents.find((x) => x.id === id);
   if (!a) return missing();
+  const hasUsage = a.capacity && !/not reported/i.test(a.capacity);
   return (
     back("agents", "Agents") +
-    heading(escape(a.name), `${a.product} · ${a.account}`, badge(a.state)) +
-    `<div class="grid"><div><section class="panel"><div class="panel-title"><h2>Connection</h2></div><div class="pad">${kv("Access", a.state)}${kv("Task delivery", a.delivery)}<div class="actions"><button data-action="toggle" data-id="${id}">${a.state === "Paused" ? "Resume access" : "Pause access"}</button>${link("agents/connect", "Reconnect")}</div></div></section><section class="panel"><div class="panel-title"><h2>Permissions</h2></div><div class="pad"><label class="check"><input type="checkbox" id="publish" ${a.access ? "checked" : ""}> Publish to Professor Bagholder · YouTube</label><label class="check"><input type="checkbox" id="delegate" ${(a.delegate ?? id === "muse") ? "checked" : ""}> Delegate work to Episode editor and Clip writer</label><button data-action="save-access" data-id="${id}">Save permissions</button></div></section></div><div><section class="panel"><div class="panel-title"><h2>Usage limits</h2></div><div class="pad"><h3>${a.capacity}</h3>${kv("Account", a.account)}${kv("On a reported limit", "Pause assignment; preserve checkpoint")}</div></section><section class="panel"><div class="pad"><h2>Activity</h2><p>${id === "muse" ? "Requested publication of Episode 12 teaser." : "No tasks yet."}</p>${id === "muse" ? link("tasks/episode", "View task") : ""}</div></section></div></div>`
+    heading(escape(agentLabel(a.product)), "", badge(a.state)) +
+    `<div class="${hasUsage ? "grid" : "narrow"}"><div><section class="panel"><div class="panel-title"><h2>Connection</h2></div><div class="pad">${kv("Access", a.state)}<div class="actions"><button data-action="toggle" data-id="${id}">${a.state === "Paused" ? "Resume access" : "Pause access"}</button>${link("agents/connect", "Reconnect")}</div></div></section><section class="panel"><div class="panel-title"><h2>Permissions</h2></div><div class="pad"><label class="check"><input type="checkbox" id="publish" ${a.access ? "checked" : ""}> Publish to Professor Bagholder · YouTube</label><label class="check"><input type="checkbox" id="delegate" ${(a.delegate ?? id === "muse") ? "checked" : ""}> Delegate work to Episode editor and Clip writer</label><button data-action="save-access" data-id="${id}">Save permissions</button></div></section></div>${hasUsage ? `<div><section class="panel"><div class="panel-title"><h2>Usage limits</h2></div><div class="pad"><h3>${escape(a.capacity)}</h3></div></section></div>` : ""}</div>`
   );
 }
 function connect() {
