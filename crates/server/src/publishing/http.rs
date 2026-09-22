@@ -84,6 +84,10 @@ impl Publisher {
             )
             .route("/v1/youtube/publish", post(publish))
             .route("/v1/publications/{id}", get(publication))
+            .route("/v1/publications/{id}/youtube", get(video_status))
+            .route("/v1/publications/{id}/visibility", post(set_visibility))
+            .route("/v1/publications/{id}/operations", get(video_operations))
+            .route("/v1/video-operations/{id}", get(video_operation))
             .route("/v1/publications/{id}/retry", post(retry))
             .nest_service("/mcp", self.mcp_service())
             .layer(DefaultBodyLimit::max(64 * 1024))
@@ -169,6 +173,9 @@ async fn authenticate(State(p): State<Publisher>, req: Request, next: Next) -> R
         ("GET", p) if p.starts_with("/v1/publications/") => Some("Checked upload status"),
         ("POST", p) if p.starts_with("/v1/publications/") && p.ends_with("/retry") => {
             Some("Requested upload retry")
+        }
+        ("POST", p) if p.starts_with("/v1/publications/") && p.ends_with("/visibility") => {
+            Some("Requested visibility change")
         }
         (_, "/mcp") => Some("MCP request"),
         _ => None,
@@ -428,4 +435,27 @@ async fn upload_media(
     let _ = tokio::fs::remove_file(&temp).await;
     transfer?;
     Ok(Json(json!({"media_id":id,"ready":true})))
+}
+
+async fn video_status(State(p): State<Publisher>, Path(id): Path<String>) -> Api<Value> {
+    Ok(Json(p.youtube_video_status(&id).await?))
+}
+async fn set_visibility(
+    State(p): State<Publisher>,
+    Path(id): Path<String>,
+    Json(input): Json<VisibilityInput>,
+) -> Api<VideoOperation> {
+    Ok(Json(p.set_video_visibility(&id, input).await?))
+}
+async fn video_operations(
+    State(p): State<Publisher>,
+    Path(id): Path<String>,
+) -> Api<Vec<VideoOperation>> {
+    Ok(Json(p.video_operations(&id).await?))
+}
+async fn video_operation(
+    State(p): State<Publisher>,
+    Path(id): Path<String>,
+) -> Api<VideoOperation> {
+    Ok(Json(p.video_operation(&id).await?))
 }

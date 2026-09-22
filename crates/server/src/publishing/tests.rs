@@ -373,6 +373,25 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
             .iter()
             .any(|t| t["name"] == "publish_youtube")
     );
+    for name in [
+        "get_youtube_video",
+        "set_youtube_visibility",
+        "get_video_operation",
+        "list_video_operations",
+    ] {
+        assert!(
+            listed["result"]["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["name"] == name)
+        );
+    }
+    let args: super::mcp::VisibilityRequest = serde_json::from_value(
+        json!({"id":"publication","request_id":Uuid::new_v4().to_string(),"privacy":"private"}),
+    )
+    .unwrap();
+    assert_eq!(args.input.privacy, "private");
     let called=mcp_json(client.post(&url).bearer_auth(&token).header("accept","application/json, text/event-stream").header("mcp-session-id",&session)
         .json(&json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"youtube_status","arguments":{}}})).send().await.unwrap()).await;
     assert_eq!(called["result"]["structuredContent"]["private_only"], true);
@@ -883,4 +902,195 @@ async fn bearer_scheme_interoperability_and_rejection() {
         assert!(!String::from_utf8_lossy(&body).contains(&token));
     }
     assert_eq!(p.secret("agent_token").await.unwrap(), token);
+}
+
+#[tokio::test]
+async fn video_correction_reconciles_failures_preserves_settings_and_guards_retirement() {
+    use axum::routing::get;
+    let (_dir, mut p) = fixture().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let videos = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+        String,
+        Value,
+    >::new()));
+    let writes = Arc::new(AtomicUsize::new(0));
+    let lose_response = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let get_videos = videos.clone();
+    let put_videos = videos.clone();
+    let put_writes = writes.clone();
+    let lose = lose_response.clone();
+    let mock = Router::new().route("/token", post(|| async {
+        Json(json!({"access_token":"access","token_type":"Bearer","expires_in":3600}))
+    })).route("/videos", get(move |axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String,String>>| {
+        let videos = get_videos.clone(); async move {
+            assert_eq!(q["part"], "snippet,status,processingDetails,contentDetails");
+            Json(json!({"items":[videos.lock().unwrap().get(&q["id"]).unwrap().clone()]}))
+        }
+    }).put(move |axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String,String>>, Json(body): Json<Value>| {
+        let videos = put_videos.clone(); let writes = put_writes.clone(); let lose=lose.clone();
+        async move {
+            assert_eq!(q["part"], "status");
+            assert!(body.get("snippet").is_none());
+            assert_eq!(body["status"]["containsSyntheticMedia"], true);
+            assert_eq!(body["status"]["selfDeclaredMadeForKids"], false);
+            assert_eq!(body["status"]["embeddable"], false);
+            assert_eq!(body["status"]["license"], "creativeCommon");
+            assert_eq!(body["status"]["publicStatsViewable"], false);
+            assert!(body["status"].get("uploadStatus").is_none());
+            videos.lock().unwrap().get_mut(body["id"].as_str().unwrap()).unwrap()["status"]["privacyStatus"] = body["status"]["privacyStatus"].clone();
+            writes.fetch_add(1, Ordering::SeqCst);
+            if lose.swap(false, Ordering::SeqCst) { StatusCode::SERVICE_UNAVAILABLE.into_response() }
+            else { Json(body).into_response() }
+        }
+    }));
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    Arc::get_mut(&mut p.0).unwrap().endpoints.token = format!("{base}/token");
+    Arc::get_mut(&mut p.0).unwrap().endpoints.videos = format!("{base}/videos");
+    account(&p).await;
+    let media_id = media(&p).await;
+    let original = p.enqueue(input(media_id.clone())).await.unwrap();
+    let corrected = p.enqueue(input(media_id)).await.unwrap();
+    for (job, video, privacy) in [
+        (&original, "original", "public"),
+        (&corrected, "corrected", "private"),
+    ] {
+        sqlx::query("UPDATE publications SET status='uploaded',video_id=? WHERE id=?")
+            .bind(video)
+            .bind(&job.id)
+            .execute(&p.0.db)
+            .await
+            .unwrap();
+        videos.lock().unwrap().insert(video.into(), json!({"id":video,"snippet":{"channelId":"channel"},
+            "status":{"privacyStatus":privacy,"uploadStatus":"processed","selfDeclaredMadeForKids":false,"containsSyntheticMedia":true,"embeddable":false,"license":"creativeCommon","publicStatsViewable":false},
+            "processingDetails":{"processingStatus":"succeeded"},"contentDetails":{"duration":"PT5M"}}));
+    }
+    let path = format!("/v1/publications/{}/visibility", corrected.id);
+    let request = json!({"request_id":Uuid::new_v4().to_string(),"privacy":"public"});
+    assert_eq!(
+        call(&p, "POST", &path, request.to_string().into_bytes(), false)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(&p, "POST", &path, request.to_string().into_bytes(), true)
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    ); // private-only
+    p.set("private_only", "false").await.unwrap();
+    let (_, denied) = call(&p, "POST", &path, request.to_string().into_bytes(), true).await;
+    assert!(
+        denied["error"]
+            .as_str()
+            .unwrap()
+            .contains("permission required")
+    );
+    p.set("youtube_manage_channel", "channel").await.unwrap();
+    let retire = VisibilityInput {
+        request_id: Uuid::new_v4().to_string(),
+        privacy: "private".into(),
+        replacement_id: Some(corrected.id.clone()),
+    };
+    let not_ready = p
+        .set_video_visibility(&original.id, retire.clone())
+        .await
+        .unwrap();
+    assert_eq!(not_ready.status, "interrupted");
+    assert_eq!(writes.load(Ordering::SeqCst), 0);
+    videos.lock().unwrap().get_mut("corrected").unwrap()["processingDetails"]["processingStatus"] =
+        json!("processing");
+    assert_eq!(
+        p.youtube_video_status(&corrected.id).await.unwrap()["ready"],
+        false
+    );
+    let (_, processing) = call(&p, "POST", &path, request.to_string().into_bytes(), true).await;
+    assert_eq!(processing["status"], "interrupted");
+    assert_eq!(writes.load(Ordering::SeqCst), 0);
+    videos.lock().unwrap().get_mut("corrected").unwrap()["processingDetails"]["processingStatus"] =
+        json!("succeeded");
+    let (_, uncertain) = call(&p, "POST", &path, request.to_string().into_bytes(), true).await;
+    assert_eq!(uncertain["status"], "interrupted");
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
+    let (_, recovered) = call(&p, "POST", &path, request.to_string().into_bytes(), true).await;
+    assert_eq!(recovered["status"], "completed");
+    assert_eq!(writes.load(Ordering::SeqCst), 1); // provider succeeded but response was lost
+    let completed = p
+        .set_video_visibility(&original.id, retire.clone())
+        .await
+        .unwrap();
+    assert_eq!(completed.status, "completed");
+    assert_eq!(completed.replacement_id, Some(corrected.id.clone()));
+    assert_eq!(
+        p.youtube_video_status(&original.id).await.unwrap()["actual_privacy"],
+        "private"
+    );
+    let prior_writes = writes.load(Ordering::SeqCst);
+    assert_eq!(
+        p.set_video_visibility(&original.id, retire.clone())
+            .await
+            .unwrap()
+            .status,
+        "completed"
+    );
+    assert_eq!(writes.load(Ordering::SeqCst), prior_writes);
+    let mut conflict = retire.clone();
+    conflict.privacy = "public".into();
+    conflict.replacement_id = None;
+    assert!(
+        p.set_video_visibility(&original.id, conflict)
+            .await
+            .is_err()
+    );
+    assert_eq!(p.video_operations(&original.id).await.unwrap().len(), 1);
+    assert_eq!(
+        call(
+            &p,
+            "GET",
+            &format!("/v1/video-operations/{}", retire.request_id),
+            vec![],
+            true
+        )
+        .await
+        .1["status"],
+        "completed"
+    );
+    videos.lock().unwrap().get_mut("original").unwrap()["snippet"]["channelId"] = json!("other");
+    assert!(p.youtube_video_status(&original.id).await.is_err());
+    p.set("publish_enabled", "false").await.unwrap();
+    assert!(
+        p.set_video_visibility(
+            &original.id,
+            VisibilityInput {
+                request_id: Uuid::new_v4().to_string(),
+                privacy: "private".into(),
+                replacement_id: None
+            }
+        )
+        .await
+        .is_err()
+    );
+    let token_before = p.secret("agent_token").await.unwrap();
+    p.0.db.close().await;
+    drop(p);
+    let db = crate::database(&format!(
+        "sqlite://{}",
+        _dir.path().join("test.db").display()
+    ))
+    .await
+    .unwrap();
+    let restarted = Publisher::new(db, _dir.path().join("publishing"), CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        restarted
+            .video_operation(&retire.request_id)
+            .await
+            .unwrap()
+            .status,
+        "completed"
+    );
+    assert_eq!(restarted.secret("agent_token").await.unwrap(), token_before);
+    server.abort();
 }

@@ -17,6 +17,13 @@ pub struct PublishingTools {
 pub struct UploadId {
     pub id: String,
 }
+#[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct VisibilityRequest {
+    pub id: String,
+    #[serde(flatten)]
+    pub input: VisibilityInput,
+}
 #[tool_router]
 impl PublishingTools {
     fn new(publisher: Publisher) -> Self {
@@ -24,6 +31,58 @@ impl PublishingTools {
             publisher,
             tool_router: Self::tool_router(),
         }
+    }
+    #[tool(
+        description = "Read current YouTube visibility, processing status, failure reasons and duration for a completed AgentWay publication. ready=true requires processing success; it does not assess content quality. Poll no faster than every five seconds."
+    )]
+    async fn get_youtube_video(
+        &self,
+        Parameters(input): Parameters<UploadId>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher
+            .youtube_video_status(&input.id)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Change an existing AgentWay video's visibility. Reuse request_id and identical inputs on retries, including uncertain failures. Returns a durable operation: inspect status/error, not just HTTP success. For retiring an original use privacy=private and replacement_id pointing to the corrected publication; AgentWay verifies replacement processing and public visibility first. Requires YouTube video-management consent. Does not replace bytes, delete videos or guarantee atomic switching of two videos."
+    )]
+    async fn set_youtube_visibility(
+        &self,
+        Parameters(request): Parameters<VisibilityRequest>,
+    ) -> Result<rmcp::Json<VideoOperation>, String> {
+        self.publisher
+            .set_video_visibility(&request.id, request.input)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Read a visibility operation by request UUID after interruption. Completed result is the last verified outcome; get_youtube_video reads current state."
+    )]
+    async fn get_video_operation(
+        &self,
+        Parameters(input): Parameters<UploadId>,
+    ) -> Result<rmcp::Json<VideoOperation>, String> {
+        self.publisher
+            .video_operation(&input.id)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "List the latest 100 durable visibility operations for a publication, including replacement links and errors."
+    )]
+    async fn list_video_operations(
+        &self,
+        Parameters(input): Parameters<UploadId>,
+    ) -> Result<rmcp::Json<Vec<VideoOperation>>, String> {
+        self.publisher
+            .video_operations(&input.id)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
     }
     #[tool(
         description = "Read the connected YouTube channel and owner's private-only policy before publishing."

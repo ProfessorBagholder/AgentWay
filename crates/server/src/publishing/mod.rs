@@ -5,6 +5,8 @@ mod oauth;
 #[cfg(test)]
 mod tests;
 mod vault;
+mod video;
+use video::{VideoOperation, VisibilityInput};
 mod worker;
 mod workspace;
 
@@ -216,8 +218,9 @@ impl Publisher {
             sqlx::query_as("SELECT channel_id,channel_name FROM youtube_account WHERE id=1")
                 .fetch_optional(&self.0.db)
                 .await?;
+        let manage_channel = self.setting("youtube_manage_channel").await?;
         Ok(
-            json!({"configured": self.setting("client_id").await?.is_some(), "account": account.map(|(id,name)| json!({"id":id,"name":name})), "private_only": self.setting("private_only").await?.as_deref() != Some("false"), "bridge_url":self.setting("bridge_url").await?.unwrap_or_default(), "agent_guidance":guidance::payload()}),
+            json!({"video_management_authorized": account.as_ref().is_some_and(|(id,_)| Some(id.as_str()) == manage_channel.as_deref()), "configured": self.setting("client_id").await?.is_some(), "account": account.map(|(id,name)| json!({"id":id,"name":name})), "private_only": self.setting("private_only").await?.as_deref() != Some("false"), "bridge_url":self.setting("bridge_url").await?.unwrap_or_default(), "agent_guidance":guidance::payload()}),
         )
     }
     pub async fn activity(&self) -> Result<Option<BridgeActivity>> {

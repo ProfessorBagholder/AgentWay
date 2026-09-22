@@ -1,4 +1,4 @@
-AgentWay publishing guidance, version 2.
+AgentWay publishing guidance, version 3.
 
 When first using this connection, briefly tell the user which publishing choices you can apply: title, description, visibility (private, unlisted or public), made-for-kids audience designation, and realistic altered or synthetic media disclosure. Explain choices in plain language when relevant to their video. Use the user's existing instructions; ask only for unresolved decisions needed to publish. Do not repeat onboarding on every upload. Revisit guidance when its version changes.
 
@@ -10,6 +10,15 @@ Use publish_youtube (POST /v1/youtube/publish) with request_id (UUID), media_id,
 
 Subscriber notifications default to on. Set notify_subscribers to false only when disabling notifications for this upload; omit it or send true to enable them.
 
-Only the schema's fields are supported. Category is currently fixed to Entertainment (24). Tags, scheduling, paid-promotion declaration, language, custom thumbnails, captions, playlist assignment and metadata edits are not supported. If the user requires an unsupported setting, explain that limitation before uploading; do not imply it was applied.
+Only the schema's fields are supported. Category is currently fixed to Entertainment (24). Tags, scheduling, paid-promotion declaration, language, custom thumbnails, captions, playlist assignment and general metadata edits are not supported. If the user requires an unsupported setting, explain that limitation before uploading; do not imply it was applied.
 
 Keep request_id and all arguments identical when retrying the same publication; use a new ID only for a new publication. Read get_publication (GET /v1/publications/{id}) for progress and results; poll queued or uploading jobs no more frequently than every five seconds. Resume interrupted uploads using retry_publication (POST /v1/publications/{id}/retry). Compare actual_privacy with requested_privacy before claiming the requested visibility. A visibility verification error is not an upload failure and must not trigger a duplicate upload. A video URL confirms upload, not completed YouTube processing or Shorts classification. Audience and synthetic-media declarations are submitted but are not currently read back from YouTube.
+
+
+Correcting an already published video: the creating agent renders and validates corrected media, including duration and ending. AgentWay does not create or edit the media. Check youtube_status.video_management_authorized before starting a correction batch; if false the owner must authorize YouTube again once in AgentWay to grant editing permission. Do not rotate the agent token or disconnect the channel.
+
+For each correction, keep the original publication ID and a stable new upload request_id. Upload the corrected video privately with notify_subscribers=false. Wait for upload completion, then poll get_youtube_video (GET /v1/publications/{id}/youtube) no faster than every five seconds until ready=true. Processing failure, rejection, missing status or an error is not success. Verify the rendered content yourself; ready=true only establishes YouTube processing.
+
+Call set_youtube_visibility (POST /v1/publications/{id}/visibility) with a fresh stable request_id and privacy=public for the corrected publication. Check the returned operation status: only completed means verified success; interrupted carries an error and may have an uncertain remote outcome. Retry the same request_id and inputs to reconcile. After verifying the corrected video is public, retire the original using that endpoint with privacy=private and replacement_id=<corrected publication ID>. This enforces that the corrected video is processed and public before hiding the original. Keep originals private; deletion is not implemented or authorized by this workflow. These two changes cannot be atomic on YouTube: briefly overlapping public copies are possible, and a failed retirement must be reported and retried, not ignored.
+
+get_video_operation (GET /v1/video-operations/{request_id}) and list_video_operations (GET /v1/publications/{id}/operations) retain operation outcomes, errors and original/replacement links. Completed results describe the last verified outcome; get_youtube_video reads current state. Never restart a correction by uploading another duplicate. YouTube replacement uploads receive new URLs; these tools do not trim or replace video bytes in place.

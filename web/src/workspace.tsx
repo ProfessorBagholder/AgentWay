@@ -291,6 +291,21 @@ function Youtube() {
                 <dt>Account</dt>
                 <dd>{s.account.name}</dd>
               </dl>
+              {s.video_management_authorized === false && (
+                <div className="stack">
+                  <p>
+                    Authorize video management to let agents change published
+                    videos’ visibility.
+                  </p>
+                  <button
+                    className="primary"
+                    disabled={connect.isPending}
+                    onClick={() => connect.mutate()}
+                  >
+                    Authorize video management
+                  </button>
+                </div>
+              )}
             </section>
             <section className="panel">
               <div className="panel-title">

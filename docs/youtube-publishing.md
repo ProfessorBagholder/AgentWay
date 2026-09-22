@@ -140,3 +140,25 @@ Sources: [Cloudflare error 1010](https://developers.cloudflare.com/support/troub
 A 401 with `AgentWay bearer token required` does not distinguish an absent header from a mismatched token. Check `docker compose logs --since 5m app` for `Agent authentication rejected`. The safe `reason` field distinguishes `authorization_missing`, `authorization_multiple`, `authorization_malformed`, `authorization_wrong_scheme` and `token_mismatch`. Diagnostics are limited to one entry per five seconds per server process; wait five seconds before a controlled retry. Credentials and request URLs are never included. Launcher readiness probes intentionally omit authorization and can produce `authorization_missing`; correlate the time with the agent's retry.
 
 The Bearer scheme is case-insensitive; the credential remains case-sensitive. Use the same existing credential in the agent connector's secure credential store. Do not rotate it merely because a request returned 401. Compare an authenticated local request with the public endpoint, then the real agent, to distinguish connector configuration from ingress or server failures.
+
+
+### Correcting published videos (guidance version 3)
+
+Existing YouTube connections need one additional consent: Platforms → YouTube → Authorize video management. This requests `youtube.force-ssl`, required by `videos.update`; it does not rotate AgentWay's bearer token. The status endpoint reports `video_management_authorized`. Existing uploads/readback continue with their original authorization. Select the same channel during consent.
+
+HTTP and MCP operations:
+
+| HTTP | MCP | Purpose |
+| --- | --- | --- |
+| GET /v1/publications/{id}/youtube | get_youtube_video | Current privacy, processing/upload status, duration, failure reasons and ready flag. |
+| POST /v1/publications/{id}/visibility | set_youtube_visibility | Set privacy using a stable UUID request_id; optional replacement_id guards retiring an original. MCP additionally takes id. |
+| GET /v1/video-operations/{request_id} | get_video_operation | Read the saved outcome after interruption. |
+| GET /v1/publications/{id}/operations | list_video_operations | Latest 100 operations for a publication, including correction links and errors. |
+
+The agent validates corrected content, uploads it privately with notifications disabled, waits for `ready=true`, publishes the replacement, then makes the original private with `replacement_id` referencing the corrected publication. The server verifies that replacement is processed and public before retiring the original. Only AgentWay-tracked completed publications in the connected channel can be modified. Private-only and agent publishing permissions still apply.
+
+Visibility intent is stored before calling YouTube; completion/error and its event are committed together. A response may have HTTP 200 while the operation is `interrupted`: agents must inspect status/error. Repeat the same request ID and input to reconcile uncertain results. A completed operation returns its recorded outcome without reapplying it; a newer operation prevents an unfinished older request from reverting it. Read the video endpoint for current state. The original publication request remains immutable; its requested privacy is the upload-time choice, not a post-upload visibility target.
+
+Whole-part YouTube status updates preserve documented writable status fields. Scheduled-video changes are rejected rather than silently removing schedules. Provider failure details are sanitized. The source/replacement switch is not atomic across YouTube videos; temporary overlap is possible, and failed retirement must be retried. No delete, in-place media replacement, content rendering or quality assessment is performed by AgentWay. Agents remain responsible for batch coordination and content validation. Operation history is exposed over HTTP/MCP and in the management history response; rendering those additional records in the Activity log UI is not implemented in this change.
+
+References: [YouTube videos.update](https://developers.google.com/youtube/v3/docs/videos/update), [video processing fields](https://developers.google.com/youtube/v3/docs/videos#processingDetails).

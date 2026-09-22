@@ -7,6 +7,7 @@ use oauth2::{
 };
 type Client = BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
 const UPLOAD: &str = "https://www.googleapis.com/auth/youtube.upload";
+const MANAGE: &str = "https://www.googleapis.com/auth/youtube.force-ssl";
 const READ: &str = "https://www.googleapis.com/auth/youtube.readonly";
 impl Publisher {
     async fn oauth_client(&self) -> Result<Client> {
@@ -30,6 +31,7 @@ impl Publisher {
             .authorize_url(CsrfToken::new_random)
             .add_scope(Scope::new(UPLOAD.into()))
             .add_scope(Scope::new(READ.into()))
+            .add_scope(Scope::new(MANAGE.into()))
             .set_pkce_challenge(challenge)
             .add_extra_param("access_type", "offline")
             .add_extra_param("prompt", "consent")
@@ -71,11 +73,13 @@ impl Publisher {
             .set_pkce_verifier(PkceCodeVerifier::new(self.0.vault.open_secret(&verifier)?))
             .request_async(&self.0.client).await.map_err(|_| anyhow::anyhow!("Google could not complete authorization. Check the client credentials and try connecting again."))?;
         if let Some(scopes) = token.scopes()
-            && ![UPLOAD, READ]
+            && ![UPLOAD, READ, MANAGE]
                 .iter()
                 .all(|needed| scopes.iter().any(|s| s.as_str() == *needed))
         {
-            bail!("Allow both upload and channel-read permissions when connecting YouTube");
+            bail!(
+                "Allow upload, channel-read and video-management permissions when connecting YouTube"
+            );
         }
         let refresh = token.refresh_token().ok_or_else(|| {
             anyhow::anyhow!("Google did not return offline access. Reconnect and grant consent.")
@@ -109,6 +113,7 @@ impl Publisher {
         let name = items[0]["snippet"]["title"].as_str().unwrap_or(id);
         sqlx::query("INSERT INTO youtube_account(id,channel_id,channel_name,refresh_token) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET channel_id=excluded.channel_id,channel_name=excluded.channel_name,refresh_token=excluded.refresh_token")
             .bind(id).bind(name).bind(self.0.vault.seal(refresh.secret())?).execute(&self.0.db).await?;
+        self.set("youtube_manage_channel", id).await?;
         *self.0.access_token.lock().await = None;
         self.emit("youtube.status", self.status().await?).await?;
         Ok(())

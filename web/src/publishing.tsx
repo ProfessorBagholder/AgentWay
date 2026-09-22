@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { cache, request } from "./api";
 
 export interface YoutubeStatus {
+  video_management_authorized?: boolean;
   configured: boolean;
   account: { id: string; name: string } | null;
   private_only: boolean;
@@ -130,12 +131,12 @@ SETTINGS
 - contains_synthetic_media: required. Declare realistic altered or synthetic content according to YouTube's guidance: https://support.google.com/youtube/answer/14328491. AI assistance with a script alone does not automatically require disclosure. The agent determines the value from the content and user instructions; AgentWay does not inspect the video to decide it.
 - Both declarations must be JSON true or false, not strings or omitted fields. Resolve unknown declarations before submission.
 - notify_subscribers: optional boolean; defaults to true. Set false to disable subscriber notifications for this upload.
-- Only the fields described here are supported. Category is currently fixed to Entertainment (24). Tags, scheduling, paid-promotion settings, language, thumbnails, captions, playlists and post-upload edits are not supported by this bridge yet. If the user requires an unsupported setting, report that limitation before uploading; do not omit it silently or claim it was applied.
+- Only the fields described here are supported. Category is currently fixed to Entertainment (24). Tags, scheduling, paid-promotion settings, language, thumbnails, captions, playlists and general metadata edits are not supported by this bridge yet. If the user requires an unsupported setting, report that limitation before uploading; do not omit it silently or claim it was applied.
 
 RETRIES AND RESULTS
 Reuse the same request_id and identical arguments on retries. Use a new request_id for a genuinely new upload; never change arguments on an existing request_id. Save the returned publication id. Poll GET /v1/publications/{id} (MCP: get_publication) every five seconds while queued or uploading. Stop and report interrupted jobs; POST /v1/publications/{id}/retry (MCP: retry_publication) resumes the same job. Do not create a new request to recover an uncertain or expired upload session.
 
-A video_url confirms upload completion only. Read GET /v1/publications/{id} after upload and compare actual_privacy with requested_privacy. Only report public publishing success when actual_privacy is public. Report any mismatch. Null actual_privacy means unverified; report visibility_error and retry the status check, never upload again for a verification failure. Current readback verifies visibility only, not the disclosure fields. Upload completion does not mean YouTube has finished processing or classified it as a Short.`;
+A video_url confirms upload completion only. Read GET /v1/publications/{id} after upload and compare actual_privacy with requested_privacy. Only report public publishing success when actual_privacy is public. Report any mismatch. Null actual_privacy means unverified; report visibility_error and retry the status check, never upload again for a verification failure. Use GET /v1/publications/{id}/youtube to check processing status and duration; ready=true means YouTube processing succeeded. Read GET /v1/status agent_guidance for the current correction workflow and visibility_schema. Visibility changes require video_management_authorized=true. POST /v1/publications/{id}/visibility accepts request_id, privacy and optional replacement_id; retries reuse identical arguments. Current readback does not verify disclosure fields. Upload completion does not mean YouTube has finished processing or classified it as a Short.`;
   return (
     <details className="panel instructions">
       <summary>Connection instructions</summary>

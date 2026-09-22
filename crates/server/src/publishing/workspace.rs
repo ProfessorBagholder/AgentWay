@@ -128,7 +128,9 @@ async fn history(
     } else {
         None
     };
-    Ok(Json(json!({"items":items,"next":next})))
+    Ok(Json(
+        json!({"items":items,"next":next,"video_operations":p.video_operations(&id).await?}),
+    ))
 }
 async fn visibility(
     State(p): State<Publisher>,
