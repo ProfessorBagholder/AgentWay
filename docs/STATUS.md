@@ -22,3 +22,7 @@ The user completed the Muse → AgentWay → YouTube flow: Google consent, chann
 ## Not implemented
 
 Cross-agent execution or wake adapters, quota observation/admission, manager failover, additional publishing platforms and RSS. AgentWay does not generate or edit content. Public YouTube publishing remains subject to Google's project audit restrictions.
+
+## Engineering audit and dependency proof
+
+The [reliability audit](design/reliability-audit.md) records source-level gaps against the original engineering contract and executable acceptance gates. The [resumable-media decision](adr/0001-resumable-media.md) selects tusd behind the Rust boundary. Its isolated dependency test passed interruption/restart/concurrency and 104 MiB integrity checks. Resumable agent-to-AgentWay uploads are **not integrated yet**; the current receiving endpoint still requires a whole-file PUT. This audit/proof does not change the deployed application.

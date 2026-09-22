@@ -1,0 +1,19 @@
+name: Resumable upload dependency proof
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - tests/architecture/tusd_contract.py
+      - .github/workflows/upload-dependency-proof.yml
+permissions:
+  contents: read
+jobs:
+  tusd-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 tests/architecture/tusd_contract.py

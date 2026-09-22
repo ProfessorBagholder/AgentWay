@@ -1,6 +1,6 @@
 # Engineering and local-launch contract
 
-21 September 2026. Accepted design requirements; implementation has not started. Supplements bridge-design.md v0.2. The user will provide the GitHub repository.
+21 September 2026. Accepted design requirements, not an implementation-status report. Supplements bridge-design.md v0.2. See [implementation status](../STATUS.md) and the [reliability audit](reliability-audit.md) for implemented behavior, gaps and acceptance evidence.
 
 ## Architecture and dependency policy
 
