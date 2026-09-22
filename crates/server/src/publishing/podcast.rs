@@ -23,7 +23,7 @@ pub struct PodcastInput {
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PodcastAction {
-    /// Create a playlist first; upload its square cover, then enable podcast status.
+    /// Create a playlist, add full episodes, upload its square cover, then enable podcast status.
     CreatePlaylist {
         title: String,
         description: String,
@@ -37,7 +37,7 @@ pub enum PodcastAction {
     },
     /// Enable podcast features on a playlist with a cover, preserving its other settings.
     EnablePodcast { playlist_id: String },
-    /// Add a full episode already uploaded to this channel. Does not reupload video bytes.
+    /// Add a full episode to an ordinary or podcast playlist owned by this channel. Does not reupload video bytes.
     AddEpisode {
         playlist_id: String,
         video_id: String,
@@ -78,10 +78,7 @@ impl Publisher {
             .json()
             .await
             .map_err(|_| anyhow::anyhow!("Invalid YouTube playlist response"))?;
-        if !body["items"].is_array() {
-            bail!("YouTube playlist response is missing items");
-        }
-        Ok(body)
+        normalize_list(body)
     }
 
     async fn owned_playlist(&self, id: &str, channel: &str, token: &str) -> Result<Value> {
@@ -248,10 +245,7 @@ impl Publisher {
                     );
                 }
                 valid_id(video_id)?;
-                let item = self.owned_playlist(playlist_id, &channel, &token).await?;
-                if item["status"]["podcastStatus"] != "enabled" {
-                    bail!("Enable podcast status first");
-                }
+                self.owned_playlist(playlist_id, &channel, &token).await?;
                 let videos = self
                     .podcast_read(
                         &self.0.endpoints.videos,
@@ -433,4 +427,43 @@ fn valid_id(id: &str) -> Result<()> {
         bail!("Invalid YouTube resource ID");
     }
     Ok(())
+}
+
+// Google list responses can omit an empty repeated field. Preserve pagination and
+// resource metadata, while still rejecting malformed item values and error bodies.
+fn normalize_list(mut body: Value) -> Result<Value> {
+    let object = body
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("Invalid YouTube list response"))?;
+    if object.contains_key("error") {
+        bail!("Unexpected YouTube error response");
+    }
+    let items = object.entry("items").or_insert_with(|| json!([]));
+    if !items.is_array() {
+        bail!("Invalid YouTube list items");
+    }
+    Ok(body)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn omitted_list_items_are_empty_but_malformed_responses_are_errors() {
+        let body = normalize_list(
+            json!({"kind":"youtube#playlistImageListResponse","nextPageToken":"next"}),
+        )
+        .unwrap();
+        assert_eq!(body["items"], json!([]));
+        assert_eq!(body["nextPageToken"], "next");
+        for invalid in [
+            json!(null),
+            json!([]),
+            json!({"items":null}),
+            json!({"items":{}}),
+            json!({"error":{"code":500}}),
+        ] {
+            assert!(normalize_list(invalid).is_err());
+        }
+    }
 }

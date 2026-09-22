@@ -1560,7 +1560,7 @@ async fn podcasts_preserve_settings_and_never_repeat_ambiguous_inserts() {
             .await
             .is_err()
     );
-    let mut add = input("add_episode", "enabled");
+    let mut add = input("add_episode", "show");
     add["video_id"] = json!("video");
     add["full_episode"] = json!(true);
     let added = p
@@ -1611,7 +1611,10 @@ async fn podcast_cover_is_validated_and_cannot_be_published_as_video() {
                 Json(json!({"items":[{"id":"show","snippet":{"channelId":"channel"}}]}))
             }),
         )
-        .route("/images", get(|| async { Json(json!({"items":[]})) }))
+        .route(
+            "/images",
+            get(|| async { Json(json!({"kind":"youtube#playlistImageListResponse"})) }),
+        )
         .route(
             "/upload",
             post(
@@ -1681,5 +1684,42 @@ async fn podcast_cover_is_validated_and_cannot_be_published_as_video() {
             assert!(result.unwrap_err().to_string().contains("square"));
         }
     }
+    server.abort();
+}
+
+#[tokio::test]
+async fn full_episode_can_be_inserted_into_an_ordinary_empty_playlist() {
+    use axum::routing::get;
+    let (_dir, mut p) = fixture().await;
+    let writes = Arc::new(AtomicUsize::new(0));
+    let counter = writes.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let mock = Router::new()
+        .route("/token", post(|| async { Json(json!({"access_token":"access","token_type":"Bearer","expires_in":3600})) }))
+        .route("/playlists", get(|| async { Json(json!({"items":[{"id":"show","snippet":{"channelId":"channel"},"status":{"podcastStatus":"unspecified"}}]})) }))
+        .route("/videos", get(|| async { Json(json!({"items":[{"id":"episode","snippet":{"channelId":"channel"}}]})) }))
+        .route("/items", get(|| async { Json(json!({"kind":"youtube#playlistItemListResponse"})) })
+            .post(move |Json(body): Json<Value>| { let counter = counter.clone(); async move {
+                assert_eq!(body["snippet"]["playlistId"], "show");
+                assert_eq!(body["snippet"]["resourceId"]["videoId"], "episode");
+                counter.fetch_add(1, Ordering::SeqCst);
+                Json(json!({"id":"membership","snippet":body["snippet"]}))
+            }}));
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    Arc::get_mut(&mut p.0).unwrap().endpoints = Endpoints {
+        token: format!("{base}/token"),
+        playlists: format!("{base}/playlists"),
+        videos: format!("{base}/videos"),
+        playlist_items: format!("{base}/items"),
+        ..Endpoints::default()
+    };
+    account(&p).await;
+    p.set("youtube_manage_channel", "channel").await.unwrap();
+    let input: podcast::PodcastInput = serde_json::from_value(json!({"request_id":Uuid::new_v4().to_string(),"channel_id":"channel","action":"add_episode","playlist_id":"show","video_id":"episode","full_episode":true})).unwrap();
+    let result = p.manage_podcast(input.clone()).await.unwrap();
+    assert_eq!(result["status"], "completed");
+    assert_eq!(p.manage_podcast(input).await.unwrap(), result);
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
     server.abort();
 }

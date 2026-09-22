@@ -183,7 +183,7 @@ Channel-description verification tolerates delayed reads with bounded backoff. I
 
 ## Podcast playlists
 
-Guidance version 7 exposes podcast setup through authenticated HTTP and MCP. Agents offer the option when a user is publishing a podcast, honor any existing preference, and resolve missing show details before changing YouTube. Existing full-episode videos are added by their YouTube IDs; no duplicate upload is needed. Shorts and promotional excerpts stay outside the podcast playlist.
+Guidance version 8 exposes podcast setup through authenticated HTTP and MCP. Agents offer the option when a user is publishing a podcast, honor any existing preference, and resolve missing show details before changing YouTube. Existing full-episode videos are added by their YouTube IDs; no duplicate upload is needed. Shorts and promotional excerpts stay outside the podcast playlist.
 
 - `list_youtube_playlists` / `GET /v1/youtube/playlists`: channel playlists with `status.podcastStatus`. Pass `page_token` from `nextPageToken` for subsequent pages.
 - Supply `playlist_id` to that read to get its episodes, playlist resource and cover-image resources. Episode pages also accept `page_token`.
@@ -193,9 +193,10 @@ Guidance version 7 exposes podcast setup through authenticated HTTP and MCP. Age
 Setup sequence:
 
 1. List existing playlists and select the intended show, or `create_playlist` with `title`, `description` and `privacy`. Save the returned `resource.id`.
-2. Reserve a cover using `POST /v1/media` with exact `size` and `mime` (`image/png` or `image/jpeg`), then PUT raw bytes with the same bearer authentication. Covers must be square and at most 2 MiB; 1280×1280 is recommended. Call `set_cover` with `playlist_id` and `media_id`. Existing hero artwork is updated; otherwise artwork is inserted. Staged covers can be removed using the existing media DELETE endpoint after success.
-3. Call `enable_podcast` with `playlist_id`. YouTube requires a playlist image first. This updates only podcast status and preserves playlist privacy, title, description and membership.
-4. Call `add_episode` for each existing full episode using `playlist_id`, YouTube `video_id`, `full_episode: true`, and optional zero-based `position`. Omit position to append. Existing membership is returned without duplication. Existing entries are not reordered. Repeat this step for future uploaded/processed episodes.
+2. Add selected full episodes using `add_episode` as described below. This works on an ordinary playlist before podcast designation.
+3. Reserve a cover using `POST /v1/media` with exact `size` and `mime` (`image/png` or `image/jpeg`), then PUT raw bytes with the same bearer authentication. Covers must be square and at most 2 MiB; 1280×1280 is recommended. Call `set_cover` with `playlist_id` and `media_id`. Existing hero artwork is updated; otherwise artwork is inserted. Staged covers can be removed using the existing media DELETE endpoint after success.
+4. Call `enable_podcast` with `playlist_id`. YouTube requires a playlist image first. This updates only podcast status and preserves playlist privacy, title, description and membership.
+Episode assignment: call `add_episode` for each existing full episode using `playlist_id`, YouTube `video_id`, `full_episode: true`, and optional zero-based `position`. Omit position to append. Existing membership is returned without duplication. Existing entries are not reordered. Repeat this step for future uploaded/processed episodes.
 
 Example operation (replace IDs with the actual connected resources):
 
