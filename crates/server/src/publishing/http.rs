@@ -317,7 +317,7 @@ async fn callback(
                 "set-cookie",
                 "agentway_oauth=; HttpOnly; SameSite=Lax; Path=/api/youtube/callback; Max-Age=0",
             )],
-            Redirect::to("/#publishing"),
+            Redirect::to("/#/platforms/youtube"),
         )
             .into_response(),
         Err(e) => (

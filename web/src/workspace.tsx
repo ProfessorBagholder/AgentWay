@@ -290,6 +290,12 @@ function Youtube() {
               <dl>
                 <dt>Account</dt>
                 <dd>{s.account.name}</dd>
+                <dt>Video management</dt>
+                <dd>
+                  {s.video_management_authorized
+                    ? "Authorized"
+                    : "Not authorized"}
+                </dd>
               </dl>
               {s.video_management_authorized === false && (
                 <div className="stack">
