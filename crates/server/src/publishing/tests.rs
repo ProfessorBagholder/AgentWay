@@ -1625,6 +1625,8 @@ async fn podcast_cover_is_validated_and_cannot_be_published_as_video() {
                     let url = session_url.clone();
                     async move {
                         assert_eq!(body["snippet"]["type"], "hero");
+                        assert!(body["snippet"].get("width").is_none());
+                        assert!(body["snippet"].get("height").is_none());
                         assert_eq!(body["snippet"]["playlistId"], "show");
                         assert_eq!(headers["x-upload-content-type"], "image/png");
                         (StatusCode::OK, [("location", url)])

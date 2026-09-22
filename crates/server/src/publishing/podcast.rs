@@ -341,7 +341,7 @@ impl Publisher {
                         &token,
                     )
                     .await?;
-                let mut metadata = json!({"snippet":{"playlistId":playlist_id,"type":"hero","width":width,"height":height}});
+                let mut metadata = json!({"snippet":{"playlistId":playlist_id,"type":"hero"}});
                 let method = if let Some(id) = existing["items"]
                     .as_array()
                     .unwrap()
