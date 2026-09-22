@@ -40,6 +40,29 @@ impl PublishingTools {
         }
     }
     #[tool(
+        description = "Read the connected YouTube channel ID, title and current channel description before editing it."
+    )]
+    async fn get_youtube_channel(&self) -> Result<rmcp::Json<Value>, String> {
+        self.publisher
+            .youtube_channel()
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Set the connected channel description (up to 1000 characters; empty clears it). Supply channel_id and exact expected_description from get_youtube_channel. Preserves other channel settings and verifies readback. Requires existing management consent. Retry identical inputs after uncertain errors; stale descriptions are rejected. Changes the channel blurb, not video descriptions or channel name."
+    )]
+    async fn set_youtube_channel_description(
+        &self,
+        Parameters(input): Parameters<ChannelDescriptionInput>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher
+            .set_channel_description(input)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
         description = "Permanently delete a faulty original after user-authorized cleanup. Original must be private; replacement_id must identify a different processed public video in the same channel. Supply confirm_delete=true only with user authorization. Reuse request_id on retries; inspect operation status/error. No new OAuth permission is needed beyond video management. Publication history remains, marked deleted."
     )]
     async fn delete_replaced_youtube_video(

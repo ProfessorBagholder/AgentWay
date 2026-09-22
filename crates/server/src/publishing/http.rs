@@ -75,6 +75,8 @@ impl Publisher {
     pub fn bridge_router(&self) -> Router {
         Router::new()
             .route("/v1/status", get(status))
+            .route("/v1/youtube/channel", get(channel_profile))
+            .route("/v1/youtube/channel/description", post(channel_description))
             .route("/v1/media", post(create_media))
             .route(
                 "/v1/media/{id}",
@@ -468,4 +470,14 @@ async fn delete_replaced_video(
     Json(input): Json<DeleteInput>,
 ) -> Api<VideoOperation> {
     Ok(Json(p.delete_replaced_video(&id, input).await?))
+}
+
+async fn channel_profile(State(p): State<Publisher>) -> Api<Value> {
+    Ok(Json(p.youtube_channel().await?))
+}
+async fn channel_description(
+    State(p): State<Publisher>,
+    Json(input): Json<ChannelDescriptionInput>,
+) -> Api<Value> {
+    Ok(Json(p.set_channel_description(input).await?))
 }

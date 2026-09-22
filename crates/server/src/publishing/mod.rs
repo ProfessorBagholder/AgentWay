@@ -1,3 +1,5 @@
+mod channel;
+use channel::ChannelDescriptionInput;
 mod guidance;
 mod http;
 mod mcp;

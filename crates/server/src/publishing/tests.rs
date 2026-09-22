@@ -374,6 +374,8 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
             .any(|t| t["name"] == "publish_youtube")
     );
     for name in [
+        "get_youtube_channel",
+        "set_youtube_channel_description",
         "delete_replaced_youtube_video",
         "list_publications",
         "get_youtube_video",
@@ -1276,5 +1278,120 @@ async fn deletion_requires_authorization_and_replacement_and_recovers_lost_respo
         "completed"
     );
     assert_eq!(p.secret("agent_token").await.unwrap(), saved_token);
+    server.abort();
+}
+
+#[tokio::test]
+async fn channel_description_preserves_settings_and_reconciles_uncertain_writes() {
+    use axum::routing::get;
+    let (_dir, mut p) = fixture().await;
+    let saved = Arc::new(Mutex::new(
+        json!({"id":"channel","snippet":{"title":"Test channel"},"brandingSettings":{"channel":{"title":"Test channel","description":"Old blurb","country":"CA","keywords":"podcast comedy","defaultLanguage":"en","unsubscribedTrailer":"trailer"},"image":{"bannerImageUrl":"deprecated"}}}),
+    ));
+    let writes = Arc::new(AtomicUsize::new(0));
+    let read = saved.clone();
+    let write = saved.clone();
+    let count = writes.clone();
+    let app = Router::new()
+        .route(
+            "/token",
+            post(|| async {
+                Json(json!({"access_token":"access","token_type":"Bearer","expires_in":3600}))
+            }),
+        )
+        .route(
+            "/channels",
+            get(move || {
+                let read = read.clone();
+                async move { Json(json!({"items":[read.lock().await.clone()]})) }
+            })
+            .put(move |Json(body): Json<Value>| {
+                let write = write.clone();
+                let count = count.clone();
+                async move {
+                    assert_eq!(body["id"], "channel");
+                    assert_eq!(body["brandingSettings"]["channel"]["country"], "CA");
+                    assert_eq!(
+                        body["brandingSettings"]["channel"]["keywords"],
+                        "podcast comedy"
+                    );
+                    assert_eq!(
+                        body["brandingSettings"]["channel"]["unsubscribedTrailer"],
+                        "trailer"
+                    );
+                    assert!(body["brandingSettings"].get("image").is_none());
+                    let n = count.fetch_add(1, Ordering::SeqCst);
+                    // First write applies but the response fails. Third write lies about success.
+                    if n != 2 {
+                        write.lock().await["brandingSettings"] = body["brandingSettings"].clone();
+                    }
+                    if n == 0 {
+                        StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        StatusCode::OK
+                    }
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    Arc::get_mut(&mut p.0).unwrap().endpoints.token = format!("{base}/token");
+    Arc::get_mut(&mut p.0).unwrap().endpoints.channels = format!("{base}/channels");
+    account(&p).await;
+    assert_eq!(
+        call(&p, "GET", "/v1/youtube/channel", vec![], false)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let read = call(&p, "GET", "/v1/youtube/channel", vec![], true).await;
+    assert_eq!(read.0, StatusCode::OK);
+    assert_eq!(read.1["description"], "Old blurb");
+    let mut input = ChannelDescriptionInput {
+        channel_id: "channel".into(),
+        expected_description: "Old blurb".into(),
+        description: "New blurb 🦍".into(),
+    };
+    assert!(p.set_channel_description(input.clone()).await.is_err()); // consent required
+    p.set("youtube_manage_channel", "channel").await.unwrap();
+    input.channel_id = "other".into();
+    assert!(p.set_channel_description(input.clone()).await.is_err());
+    input.channel_id = "channel".into();
+    input.expected_description = "stale".into();
+    assert!(p.set_channel_description(input.clone()).await.is_err());
+    input.expected_description = "Old blurb".into();
+    assert_eq!(writes.load(Ordering::SeqCst), 0);
+    assert!(p.set_channel_description(input.clone()).await.is_err()); // uncertain response
+    let retried = call(
+        &p,
+        "POST",
+        "/v1/youtube/channel/description",
+        serde_json::to_vec(&input).unwrap(),
+        true,
+    )
+    .await;
+    assert_eq!(retried.0, StatusCode::OK);
+    assert_eq!(retried.1["verified"], true);
+    assert_eq!(writes.load(Ordering::SeqCst), 1); // retry reconciles without another write
+    input.expected_description = input.description.clone();
+    input.description = String::new(); // explicit clearing allowed
+    assert_eq!(
+        p.set_channel_description(input.clone()).await.unwrap()["channel"]["description"],
+        ""
+    );
+    input.expected_description = String::new();
+    input.description = "not saved".into();
+    assert!(p.set_channel_description(input.clone()).await.is_err()); // success requires readback
+    input.description = "🦍".repeat(1001);
+    assert!(p.set_channel_description(input.clone()).await.is_err());
+    assert_eq!(writes.load(Ordering::SeqCst), 3);
+    p.set("publish_enabled", "false").await.unwrap();
+    input.description = "blocked".into();
+    assert!(p.set_channel_description(input.clone()).await.is_err());
+    p.set("publish_enabled", "true").await.unwrap();
+    saved.lock().await["id"] = json!("another-channel");
+    assert!(p.set_channel_description(input).await.is_err());
+    assert_eq!(writes.load(Ordering::SeqCst), 3);
     server.abort();
 }
