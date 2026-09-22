@@ -43,6 +43,7 @@ struct CachedToken {
     value: String,
     expires: std::time::Instant,
 }
+#[derive(Clone)]
 struct Endpoints {
     token: String,
     channels: String,

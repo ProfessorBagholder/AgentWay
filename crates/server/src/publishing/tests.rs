@@ -1595,9 +1595,12 @@ async fn podcasts_preserve_settings_and_never_repeat_ambiguous_inserts() {
 #[tokio::test]
 async fn podcast_cover_is_validated_and_cannot_be_published_as_video() {
     use axum::routing::get;
-    let (_dir, mut p) = fixture().await;
+    let (dir, mut p) = fixture().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
+    let received = Arc::new(AtomicUsize::new(0));
+    let uploaded = received.clone();
+    let session_url = format!("{base}/upload?upload_id=secret-session");
     let mock = Router::new()
         .route(
             "/token",
@@ -1618,16 +1621,38 @@ async fn podcast_cover_is_validated_and_cannot_be_published_as_video() {
         .route(
             "/upload",
             post(
-                |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
-                    assert!(
-                        headers["content-type"]
+                move |headers: axum::http::HeaderMap, Json(body): Json<Value>| {
+                    let url = session_url.clone();
+                    async move {
+                        assert_eq!(body["snippet"]["type"], "hero");
+                        assert_eq!(body["snippet"]["playlistId"], "show");
+                        assert_eq!(headers["x-upload-content-type"], "image/png");
+                        (StatusCode::OK, [("location", url)])
+                    }
+                },
+            )
+            .put(
+                move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                    let received = uploaded.clone();
+                    async move {
+                        if headers["content-range"]
                             .to_str()
                             .unwrap()
-                            .starts_with("multipart/related; boundary=")
-                    );
-                    assert!(String::from_utf8_lossy(&body).contains("\"type\":\"hero\""));
-                    assert!(String::from_utf8_lossy(&body).contains("\"playlistId\":\"show\""));
-                    Json(json!({"id":"cover","snippet":{"playlistId":"show","type":"hero"}}))
+                            .starts_with("bytes */")
+                        {
+                            if received.load(Ordering::SeqCst) == 0 {
+                                return StatusCode::PERMANENT_REDIRECT.into_response();
+                            }
+                            return Json(
+                                json!({"id":"cover","snippet":{"playlistId":"show","type":"hero"}}),
+                            )
+                            .into_response();
+                        }
+                        assert!(!body.is_empty());
+                        received.fetch_add(1, Ordering::SeqCst);
+                        // Simulate an applied upload whose completion response was lost.
+                        StatusCode::BAD_GATEWAY.into_response()
+                    }
                 },
             ),
         );
@@ -1676,10 +1701,37 @@ async fn podcast_cover_is_validated_and_cannot_be_published_as_video() {
             StatusCode::OK
         );
         assert!(p.enqueue(input(media_id.into())).await.is_err());
-        let request=serde_json::from_value(json!({"request_id":Uuid::new_v4().to_string(),"channel_id":"channel","action":"set_cover","playlist_id":"show","media_id":media_id})).unwrap();
-        let result = p.manage_podcast(request).await;
+        let request: podcast::PodcastInput=serde_json::from_value(json!({"request_id":Uuid::new_v4().to_string(),"channel_id":"channel","action":"set_cover","playlist_id":"show","media_id":media_id})).unwrap();
         if width == height {
-            assert_eq!(result.unwrap()["status"], "completed");
+            // Upgrade a legacy multipart operation that has no saved upload session.
+            sqlx::query("INSERT INTO podcast_operations(request_id,channel_id,input,result) VALUES(?,?,?,?)")
+                .bind(&request.request_id).bind("channel").bind(serde_json::to_string(&request).unwrap())
+                .bind(r#"{"status":"outcome_unknown"}"#).execute(&p.0.db).await.unwrap();
+        }
+        let result = p.manage_podcast(request.clone()).await;
+        if width == height {
+            let pending = result.unwrap();
+            assert_eq!(pending["status"], "upload_pending");
+            assert_eq!(pending["http_status"], 502);
+            assert!(!pending.to_string().contains("secret-session"));
+            let endpoints = p.0.endpoints.clone();
+            p.0.db.close().await;
+            drop(p);
+            let db = crate::database(&format!(
+                "sqlite://{}",
+                dir.path().join("test.db").display()
+            ))
+            .await
+            .unwrap();
+            p = Publisher::new(db, dir.path().join("publishing"), CancellationToken::new())
+                .await
+                .unwrap();
+            Arc::get_mut(&mut p.0).unwrap().endpoints = endpoints;
+            assert_eq!(
+                p.manage_podcast(request).await.unwrap()["status"],
+                "completed"
+            );
+            assert_eq!(received.load(Ordering::SeqCst), 1);
         } else {
             assert!(result.unwrap_err().to_string().contains("square"));
         }

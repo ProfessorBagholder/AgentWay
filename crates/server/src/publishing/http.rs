@@ -505,7 +505,7 @@ async fn podcast(
     Json(input): Json<podcast::PodcastInput>,
 ) -> Result<Response, Error> {
     let result = p.manage_podcast(input).await?;
-    let status = if result["status"] == "outcome_unknown" {
+    let status = if result["status"] == "outcome_unknown" || result["status"] == "upload_pending" {
         StatusCode::ACCEPTED
     } else {
         StatusCode::OK

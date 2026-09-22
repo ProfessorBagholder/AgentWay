@@ -182,8 +182,16 @@ impl Publisher {
             if original != encoded {
                 bail!("request_id already belongs to another operation; reuse original inputs");
             }
-            // Never resend a mutation, including after a process restart or lost response.
-            return Ok(serde_json::from_str(&result)?);
+            let result: Value = serde_json::from_str(&result)?;
+            // Cover is a desired-state update: resume its saved upload rather than
+            // replaying playlist/episode insertions. Old multipart attempts can be
+            // recovered by setting the same cover, updating any existing hero image.
+            if !matches!(input.operation, PodcastAction::SetCover { .. })
+                || !["outcome_unknown", "upload_pending"]
+                    .contains(&result["status"].as_str().unwrap_or(""))
+            {
+                return Ok(result);
+            }
         }
         let token = self.access_token(&channel).await?;
         let mut request = match &input.operation {
@@ -321,8 +329,7 @@ impl Publisher {
                 if width == 0 || width != height {
                     bail!("Podcast cover must be square");
                 }
-                // Google's upload API uses multipart/related, not multipart/form-data.
-                let boundary = format!("agentway-{}", Uuid::new_v4());
+
                 let existing = self
                     .podcast_read(
                         &self.0.endpoints.playlist_images,
@@ -347,18 +354,19 @@ impl Publisher {
                 } else {
                     Method::POST
                 };
-                let mut body = format!("--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n{metadata}\r\n--{boundary}\r\nContent-Type: {}\r\n\r\n", media.mime).into_bytes();
-                body.extend_from_slice(&bytes);
-                body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-                self.0
-                    .client
-                    .request(method, &self.0.endpoints.playlist_images_upload)
-                    .query(&[("part", "snippet"), ("uploadType", "multipart")])
-                    .header(
-                        "content-type",
-                        format!("multipart/related; boundary={boundary}"),
+                return self
+                    .upload_podcast_cover(
+                        &input,
+                        &encoded,
+                        CoverUpload {
+                            method,
+                            metadata,
+                            bytes,
+                            mime: media.mime,
+                        },
+                        &token,
                     )
-                    .body(body)
+                    .await;
             }
         };
         request = request.bearer_auth(token).timeout(Duration::from_secs(30));
@@ -369,7 +377,17 @@ impl Publisher {
             .await?;
         let response = match request.send().await {
             Ok(response) => response,
-            Err(_) => return Ok(pending),
+            Err(error) => {
+                let mut pending = pending;
+                pending["error"] = json!(if error.is_timeout() {
+                    "provider_timeout"
+                } else if error.is_connect() {
+                    "provider_connection_failed"
+                } else {
+                    "provider_transport_error"
+                });
+                return self.save_podcast_result(&input, &encoded, pending).await;
+            }
         };
         let status = response.status();
         if status.as_u16() == 401 {
@@ -392,6 +410,8 @@ impl Publisher {
             json!({"status":"rejected","http_status":status.as_u16(),"reason":reason,
                 "next_action":"Correct the reported issue and use a new request_id. For podcastNotAllowed, upload a square playlist cover first."})
         } else {
+            let mut pending = pending;
+            pending["http_status"] = json!(status.as_u16());
             pending
         };
         self.save_podcast_result(&input, &encoded, result).await
@@ -443,6 +463,192 @@ fn normalize_list(mut body: Value) -> Result<Value> {
         bail!("Invalid YouTube list items");
     }
     Ok(body)
+}
+
+struct CoverUpload {
+    method: Method,
+    metadata: Value,
+    bytes: Vec<u8>,
+    mime: String,
+}
+
+impl Publisher {
+    async fn upload_podcast_cover(
+        &self,
+        input: &PodcastInput,
+        encoded: &str,
+        upload: CoverUpload,
+        token: &str,
+    ) -> Result<Value> {
+        let saved: Option<String> =
+            sqlx::query_scalar("SELECT upload_session FROM podcast_operations WHERE request_id=?")
+                .bind(&input.request_id)
+                .fetch_optional(&self.0.db)
+                .await?
+                .flatten();
+        let pending = json!({"status":"upload_pending","request_id":input.request_id,
+            "next_action":"Retry set_cover with the SAME request_id and identical inputs after five seconds to check and resume the saved cover upload. Do not create a new request ID.","retry_after_seconds":5});
+        self.save_podcast_result(input, encoded, pending.clone())
+            .await?;
+        let size = upload.bytes.len() as i64;
+        let session = if let Some(saved) = saved {
+            self.0.vault.open_secret(&saved)?
+        } else {
+            // Initiation sends metadata only. Losing its response cannot publish image bytes.
+            let response = self
+                .0
+                .client
+                .request(upload.method, &self.0.endpoints.playlist_images_upload)
+                .query(&[("part", "snippet"), ("uploadType", "resumable")])
+                .bearer_auth(token)
+                .header("X-Upload-Content-Type", &upload.mime)
+                .header("X-Upload-Content-Length", size)
+                .json(&upload.metadata)
+                .timeout(Duration::from_secs(30))
+                .send()
+                .await;
+            let response = match response {
+                Ok(r) => r,
+                Err(e) => {
+                    return self
+                        .cover_transport_result(input, encoded, pending, &e)
+                        .await;
+                }
+            };
+            if !response.status().is_success() {
+                return self
+                    .cover_response_result(input, encoded, pending, response)
+                    .await;
+            }
+            let Some(session) = response
+                .headers()
+                .get("location")
+                .and_then(|h| h.to_str().ok())
+            else {
+                let mut pending = pending;
+                pending["error"] = json!("upload_session_missing");
+                return self.save_podcast_result(input, encoded, pending).await;
+            };
+            super::worker::validate_session(session, &self.0.endpoints.playlist_images_upload)?;
+            sqlx::query("UPDATE podcast_operations SET upload_session=? WHERE request_id=?")
+                .bind(self.0.vault.seal(session)?)
+                .bind(&input.request_id)
+                .execute(&self.0.db)
+                .await?;
+            session.to_owned()
+        };
+        super::worker::validate_session(&session, &self.0.endpoints.playlist_images_upload)?;
+        // Query before sending bytes, including after restart or a lost final response.
+        let probe = self
+            .0
+            .client
+            .put(&session)
+            .bearer_auth(token)
+            .header("Content-Length", 0)
+            .header("Content-Range", format!("bytes */{size}"))
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await;
+        let probe = match probe {
+            Ok(r) => r,
+            Err(e) => {
+                return self
+                    .cover_transport_result(input, encoded, pending, &e)
+                    .await;
+            }
+        };
+        if probe.status().as_u16() != 308 {
+            return self
+                .cover_response_result(input, encoded, pending, probe)
+                .await;
+        }
+        let offset = super::worker::next_offset(probe.headers(), size)?;
+        if offset == size {
+            return self.save_podcast_result(input, encoded, pending).await;
+        }
+        let response = self
+            .0
+            .client
+            .put(&session)
+            .bearer_auth(token)
+            .header("Content-Type", &upload.mime)
+            .header(
+                "Content-Range",
+                format!("bytes {offset}-{}/{size}", size - 1),
+            )
+            .body(upload.bytes[offset as usize..].to_vec())
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await;
+        match response {
+            Ok(r) => self.cover_response_result(input, encoded, pending, r).await,
+            Err(e) => {
+                self.cover_transport_result(input, encoded, pending, &e)
+                    .await
+            }
+        }
+    }
+
+    async fn cover_transport_result(
+        &self,
+        input: &PodcastInput,
+        encoded: &str,
+        mut pending: Value,
+        error: &reqwest::Error,
+    ) -> Result<Value> {
+        // Never persist reqwest's Display: it can include the credential-bearing session URL.
+        pending["error"] = json!(if error.is_timeout() {
+            "provider_timeout"
+        } else if error.is_connect() {
+            "provider_connection_failed"
+        } else {
+            "provider_transport_error"
+        });
+        self.save_podcast_result(input, encoded, pending).await
+    }
+
+    async fn cover_response_result(
+        &self,
+        input: &PodcastInput,
+        encoded: &str,
+        mut pending: Value,
+        response: reqwest::Response,
+    ) -> Result<Value> {
+        let status = response.status();
+        if status.as_u16() == 401 {
+            *self.0.access_token.lock().await = None;
+        }
+        pending["http_status"] = json!(status.as_u16());
+        let body = response.json::<Value>().await.unwrap_or(Value::Null);
+        let result = if status.is_success() && body["id"].is_string() {
+            json!({"status":"completed","resource":body})
+        } else {
+            let reason = body
+                .pointer("/error/errors/0/reason")
+                .and_then(Value::as_str)
+                .unwrap_or("provider_response_unconfirmed");
+            // Keep only a bounded error code, never arbitrary upstream HTML or URLs.
+            pending["error"] = json!(
+                reason
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+                    .take(100)
+                    .collect::<String>()
+            );
+            if [404, 410].contains(&status.as_u16()) {
+                pending["status"] = json!("outcome_unknown");
+                pending["next_action"] = json!(
+                    "Upload session expired. Inspect playlist cover state; this request will not create a replacement session automatically."
+                );
+            } else if status.is_client_error() && ![408, 429, 401].contains(&status.as_u16()) {
+                pending["status"] = json!("rejected");
+                pending["next_action"] =
+                    json!("Correct the provider rejection before submitting a new request ID.");
+            }
+            pending
+        };
+        self.save_podcast_result(input, encoded, result).await
+    }
 }
 
 #[cfg(test)]

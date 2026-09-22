@@ -197,7 +197,7 @@ fn provider_error(status: u16) -> anyhow::Error {
         _ => "YouTube rejected the upload. Check video format and metadata before retrying.",
     })
 }
-fn validate_session(value: &str, allowed_endpoint: &str) -> Result<()> {
+pub(super) fn validate_session(value: &str, allowed_endpoint: &str) -> Result<()> {
     let allowed = reqwest::Url::parse(allowed_endpoint)?;
     let url = reqwest::Url::parse(value)?;
     if url.origin() != allowed.origin()
@@ -209,7 +209,7 @@ fn validate_session(value: &str, allowed_endpoint: &str) -> Result<()> {
     }
     Ok(())
 }
-fn next_offset(headers: &reqwest::header::HeaderMap, size: i64) -> Result<i64> {
+pub(super) fn next_offset(headers: &reqwest::header::HeaderMap, size: i64) -> Result<i64> {
     let Some(range) = headers.get("range") else {
         return Ok(0);
     };
