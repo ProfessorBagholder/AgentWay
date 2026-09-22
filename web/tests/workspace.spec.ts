@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 const publication = {
   id: "upload",
+  agent_name: "Muse",
   title: "Podcast teaser",
   status: "uploaded",
   uploaded_bytes: 4,
@@ -153,7 +154,9 @@ test("routes, theme, platform fields and task history survive navigation", async
   ).toBeVisible();
   await page.getByRole("link", { name: "View activity" }).click();
   await expect(page).toHaveURL(/#\/activity\?task=upload$/);
-  await page.locator("summary").click();
+  await page
+    .getByRole("button", { name: /Podcast teaser.*Upload video/ })
+    .click();
   await expect(page.locator(".journal li")).toHaveCount(2);
   await page.goBack();
   await expect(
@@ -226,4 +229,61 @@ test("agent permission writes and disconnect require explicit actions", async ({
     .click();
   await expect(page.getByText("Disconnected", { exact: true })).toBeVisible();
   expect(disconnectWrites).toBe(1);
+});
+
+test("settings align controls and save only edited values without reloading", async ({
+  page,
+}) => {
+  let writes = 0;
+  await page.route("**/api/publishing/bridge", async (r) => {
+    writes++;
+    await r.fulfill({
+      json: {
+        configured: true,
+        account: { id: "channel", name: "Test channel" },
+        private_only: false,
+        bridge_url: r.request().postDataJSON().url,
+      },
+    });
+  });
+  await page.goto("/#/settings");
+  const save = page.getByRole("button", { name: "Save", exact: true });
+  await expect(save).toBeDisabled();
+  const documents: string[] = [];
+  page.on("request", (r) => {
+    if (r.isNavigationRequest()) documents.push(r.url());
+  });
+  await page
+    .getByRole("textbox", { name: "Agent endpoint" })
+    .fill("https://updated.example");
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(page.getByRole("status")).toHaveText("Saved");
+  await expect(save).toBeDisabled();
+  expect(writes).toBe(1);
+  await page
+    .getByRole("textbox", { name: "Agent endpoint" })
+    .fill("https://another.example");
+  await expect(page.getByText("Saved", { exact: true })).toHaveCount(0);
+  await page.getByRole("radio", { name: "Light", exact: true }).check();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  expect(documents).toEqual([]);
+});
+test("operational lists retain attribution and aligned columns at all sizes", async ({
+  page,
+}) => {
+  for (const width of [1440, 900, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of ["tasks", "activity"]) {
+      await page.goto(`/#/${path}`);
+      const row = page.locator(".work-table tbody tr").first();
+      for (const text of ["Muse", "YouTube", "Uploaded"])
+        await expect(row.getByText(text, { exact: true })).toBeVisible();
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth > innerWidth,
+        ),
+      ).toBe(false);
+    }
+  }
 });
