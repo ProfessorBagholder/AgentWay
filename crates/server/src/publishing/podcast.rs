@@ -486,7 +486,7 @@ impl Publisher {
                 .fetch_optional(&self.0.db)
                 .await?
                 .flatten();
-        let pending = json!({"status":"upload_pending","request_id":input.request_id,
+        let mut pending = json!({"status":"upload_pending","request_id":input.request_id,
             "next_action":"Retry set_cover with the SAME request_id and identical inputs after five seconds to check and resume the saved cover upload. Do not create a new request ID.","retry_after_seconds":5});
         self.save_podcast_result(input, encoded, pending.clone())
             .await?;
@@ -494,6 +494,7 @@ impl Publisher {
         let session = if let Some(saved) = saved {
             self.0.vault.open_secret(&saved)?
         } else {
+            pending["phase"] = json!("initialize");
             // Initiation sends metadata only. Losing its response cannot publish image bytes.
             let response = self
                 .0
@@ -538,6 +539,7 @@ impl Publisher {
             session.to_owned()
         };
         super::worker::validate_session(&session, &self.0.endpoints.playlist_images_upload)?;
+        pending["phase"] = json!("check_session");
         // Query before sending bytes, including after restart or a lost final response.
         let probe = self
             .0
@@ -566,6 +568,7 @@ impl Publisher {
         if offset == size {
             return self.save_podcast_result(input, encoded, pending).await;
         }
+        pending["phase"] = json!("transfer");
         let response = self
             .0
             .client
@@ -635,10 +638,17 @@ impl Publisher {
                     .take(100)
                     .collect::<String>()
             );
-            if [404, 410].contains(&status.as_u16()) {
-                pending["status"] = json!("outcome_unknown");
+            if [404, 410].contains(&status.as_u16()) && pending["phase"] != "initialize" {
+                // A terminal session cannot accept more bytes. Cover is a desired-state
+                // update, not playlist/video creation. The next identical retry re-reads
+                // hero artwork and selects update versus insert before initiating again.
+                sqlx::query("UPDATE podcast_operations SET upload_session=NULL WHERE request_id=?")
+                    .bind(&input.request_id)
+                    .execute(&self.0.db)
+                    .await?;
+                pending["error"] = json!("upload_session_expired");
                 pending["next_action"] = json!(
-                    "Upload session expired. Inspect playlist cover state; this request will not create a replacement session automatically."
+                    "Retry set_cover with the SAME request_id and identical inputs after five seconds. AgentWay will re-read current cover artwork and start a replacement session for the same image."
                 );
             } else if status.is_client_error() && ![408, 429, 401].contains(&status.as_u16()) {
                 pending["status"] = json!("rejected");

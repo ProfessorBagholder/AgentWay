@@ -1600,6 +1600,9 @@ async fn podcast_cover_is_validated_and_cannot_be_published_as_video() {
     let base = format!("http://{}", listener.local_addr().unwrap());
     let received = Arc::new(AtomicUsize::new(0));
     let uploaded = received.clone();
+    let sessions = Arc::new(AtomicUsize::new(0));
+    let initiated = sessions.clone();
+    let checked = sessions.clone();
     let session_url = format!("{base}/upload?upload_id=secret-session");
     let mock = Router::new()
         .route(
@@ -1623,6 +1626,7 @@ async fn podcast_cover_is_validated_and_cannot_be_published_as_video() {
             post(
                 move |headers: axum::http::HeaderMap, Json(body): Json<Value>| {
                     let url = session_url.clone();
+                    initiated.fetch_add(1, Ordering::SeqCst);
                     async move {
                         assert_eq!(body["snippet"]["type"], "hero");
                         assert!(body["snippet"].get("width").is_none());
@@ -1636,12 +1640,16 @@ async fn podcast_cover_is_validated_and_cannot_be_published_as_video() {
             .put(
                 move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
                     let received = uploaded.clone();
+                    let sessions = checked.clone();
                     async move {
                         if headers["content-range"]
                             .to_str()
                             .unwrap()
                             .starts_with("bytes */")
                         {
+                            if sessions.load(Ordering::SeqCst) == 1 {
+                                return StatusCode::GONE.into_response();
+                            }
                             if received.load(Ordering::SeqCst) == 0 {
                                 return StatusCode::PERMANENT_REDIRECT.into_response();
                             }
@@ -1712,7 +1720,12 @@ async fn podcast_cover_is_validated_and_cannot_be_published_as_video() {
         }
         let result = p.manage_podcast(request.clone()).await;
         if width == height {
-            let pending = result.unwrap();
+            let expired = result.unwrap();
+            assert_eq!(expired["status"], "upload_pending");
+            assert_eq!(expired["http_status"], 410);
+            assert_eq!(expired["error"], "upload_session_expired");
+            assert_eq!(received.load(Ordering::SeqCst), 0);
+            let pending = p.manage_podcast(request.clone()).await.unwrap();
             assert_eq!(pending["status"], "upload_pending");
             assert_eq!(pending["http_status"], 502);
             assert!(!pending.to_string().contains("secret-session"));
@@ -1734,6 +1747,7 @@ async fn podcast_cover_is_validated_and_cannot_be_published_as_video() {
                 "completed"
             );
             assert_eq!(received.load(Ordering::SeqCst), 1);
+            assert_eq!(sessions.load(Ordering::SeqCst), 2);
         } else {
             assert!(result.unwrap_err().to_string().contains("square"));
         }
