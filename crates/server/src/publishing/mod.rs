@@ -6,6 +6,7 @@ mod oauth;
 mod tests;
 mod vault;
 mod worker;
+mod workspace;
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -285,11 +286,12 @@ impl Publisher {
         Ok(())
     }
     async fn publish_event(&self, id: &str) -> Result<()> {
-        self.emit(
-            "publication.upsert",
-            serde_json::to_value(self.publication(id).await?)?,
-        )
-        .await
+        let mut value = serde_json::to_value(self.publication(id).await?)?;
+        let timestamp: String = sqlx::query_scalar("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')")
+            .fetch_one(&self.0.db)
+            .await?;
+        value["event_at"] = json!(timestamp);
+        self.emit("publication.upsert", value).await
     }
     pub async fn create_media(&self, input: MediaInput) -> Result<Value> {
         if !(1..=MAX_MEDIA).contains(&input.size)
@@ -313,6 +315,7 @@ impl Publisher {
         )
     }
     pub async fn enqueue(&self, input: PublishInput) -> Result<Publication> {
+        self.check_publish_access().await?;
         if Uuid::parse_str(&input.request_id).is_err() || Uuid::parse_str(&input.media_id).is_err()
         {
             bail!("request_id and media_id must be UUIDs");
@@ -368,6 +371,7 @@ impl Publisher {
         self.publication(&id).await
     }
     pub async fn retry(&self, id: &str) -> Result<Publication> {
+        self.check_publish_access().await?;
         sqlx::query("UPDATE publications SET status='queued',error=NULL,revision=revision+1 WHERE id=? AND status='interrupted'").bind(id).execute(&self.0.db).await?;
         self.publish_event(id).await?;
         self.0.wake.notify_one();

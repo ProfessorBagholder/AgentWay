@@ -1,14 +1,20 @@
 import { useQuery } from "@tanstack/react-query";
 import { cache, request } from "./api";
-import { UploadRow, upsertPublication, type Publication } from "./publishing";
-
+import {
+  upsertPublication,
+  type Publication,
+  type YoutubeStatus,
+} from "./publishing";
 export interface BridgeActivity {
   last_seen: string;
   operation: string;
   revision: number;
 }
-interface BridgeConnection {
+export interface BridgeConnection {
+  id: string;
   name: string;
+  state: string;
+  publish_enabled: boolean;
   activity: BridgeActivity | null;
 }
 export function renameConnection(name: string) {
@@ -18,82 +24,29 @@ export function renameConnection(name: string) {
 }
 export function upsertActivity(activity: BridgeActivity) {
   cache.setQueryData<BridgeConnection>(["bridge-connection"], (old) =>
-    old?.activity && old.activity.revision >= activity.revision
+    !old || (old.activity && old.activity.revision >= activity.revision)
       ? old
-      : { name: old?.name ?? "Publishing connection", activity },
+      : {
+          ...old,
+          activity,
+          state: old.state === "Disconnected" ? old.state : "Connected",
+        },
   );
 }
-export function AgentActivity({
-  openPublishing,
-}: {
-  openPublishing: () => void;
-}) {
-  const loaded = useQuery({
-    queryKey: ["bridge-connection-loaded"],
-    queryFn: ({ signal }) =>
-      fetch("/api/publishing/connection", { signal }).then(async (r) => {
-        if (!r.ok) throw new Error("Could not load connection activity");
-        const result = (await r.json()) as BridgeConnection;
-        const current = cache.getQueryData<BridgeConnection>([
-          "bridge-connection",
-        ]);
-        if (
-          current?.activity &&
-          current.activity.revision > (result.activity?.revision ?? 0)
-        ) {
-          result.activity = current.activity;
-        }
-        cache.setQueryData(["bridge-connection"], result);
-        return true;
-      }),
-  });
-  const activity = useQuery<BridgeConnection>({
+export function useConnection() {
+  return useQuery({
     queryKey: ["bridge-connection"],
-    enabled: false,
+    queryFn: () => request<BridgeConnection>("/api/publishing/connection"),
   });
-  return (
-    <section
-      className="panel publishing-section"
-      aria-label="Agent connections"
-    >
-      <h2>{activity.data?.name ?? "Agent connection"}</h2>
-      <p>
-        Connectors set up in your agent use this connection to upload to YouTube
-        and check results.
-      </p>
-      {loaded.isPending ? (
-        <p role="status">Loading activity…</p>
-      ) : loaded.error ? (
-        <p className="error" role="alert">
-          {loaded.error.message}
-        </p>
-      ) : activity.data?.activity ? (
-        <div className="row">
-          <div className="row-main">
-            <strong>{activity.data.activity.operation}</strong>
-            <small>
-              Last authenticated request:{" "}
-              <time dateTime={activity.data.activity.last_seen}>
-                {new Date(activity.data.activity.last_seen).toLocaleString()}
-              </time>
-            </small>
-          </div>
-        </div>
-      ) : (
-        <p>No requests recorded since activity tracking was enabled.</p>
-      )}
-      <p className="field-help">
-        This connection uses a shared token. AgentWay cannot distinguish agents
-        using that token or see work they do outside AgentWay.
-      </p>
-      <button className="secondary" onClick={openPublishing}>
-        Connection settings
-      </button>
-    </section>
-  );
 }
-export function PublishingTasks() {
-  const uploads = useQuery({
+export function useYoutube() {
+  return useQuery({
+    queryKey: ["youtube"],
+    queryFn: () => request<YoutubeStatus>("/api/youtube"),
+  });
+}
+export function usePublications(filter = "all") {
+  const loaded = useQuery({
     queryKey: ["publications-loaded"],
     queryFn: async () => {
       const rows = await request<Publication[]>("/api/publications");
@@ -102,29 +55,14 @@ export function PublishingTasks() {
     },
   });
   const { data: ids = [] } = useQuery<string[]>({
-    queryKey: ["publications"],
+    queryKey: filter === "all" ? ["publications"] : ["publications", filter],
     enabled: false,
   });
-  return (
-    <section className="panel publishing-section" aria-label="Publishing tasks">
-      {uploads.isPending ? (
-        <p role="status">Loading tasks…</p>
-      ) : uploads.error ? (
-        <p className="error" role="alert">
-          {uploads.error.message}
-        </p>
-      ) : ids.length ? (
-        <div className="rows">
-          {ids.map((id) => (
-            <UploadRow key={id} id={id} />
-          ))}
-        </div>
-      ) : (
-        <div className="empty">
-          <h2>No publishing tasks</h2>
-          <p>Uploads requested through AgentWay will appear here.</p>
-        </div>
-      )}
-    </section>
-  );
+  return { ...loaded, ids };
+}
+export function usePublication(id: string) {
+  return useQuery<Publication>({
+    queryKey: ["publication", id],
+    enabled: false,
+  });
 }

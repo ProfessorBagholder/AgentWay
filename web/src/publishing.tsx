@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { cache, request } from "./api";
 
 export interface YoutubeStatus {
@@ -20,6 +20,23 @@ export interface Publication {
   revision: number;
 }
 export function upsertPublication(p: Publication) {
+  const previous = cache.getQueryData<Publication>(["publication", p.id]);
+  if (previous && previous.revision >= p.revision) return;
+  for (const [filter, status] of [
+    ["attention", "interrupted"],
+    ["complete", "uploaded"],
+  ]) {
+    cache.setQueryData<string[]>(["publications", filter], (old) => {
+      const ids = old ?? [];
+      return p.status === status
+        ? ids.includes(p.id)
+          ? ids
+          : [p.id, ...ids]
+        : ids.includes(p.id)
+          ? ids.filter((id) => id !== p.id)
+          : ids;
+    });
+  }
   cache.setQueryData<Publication>(["publication", p.id], (old) =>
     old && old.revision >= p.revision ? old : p,
   );
@@ -27,106 +44,7 @@ export function upsertPublication(p: Publication) {
     old?.includes(p.id) ? old : [p.id, ...(old ?? [])],
   );
 }
-export function Publishing() {
-  const status = useQuery({
-    queryKey: ["youtube"],
-    queryFn: () => request<YoutubeStatus>("/api/youtube"),
-  });
-  const connect = useMutation({
-    mutationFn: () => request<{ url: string }>("/api/youtube/connect", {}),
-    onSuccess: ({ url }) => {
-      // Google consent is an external navigation, not an app refresh.
-      window.location.assign(url);
-    },
-  });
-  const disconnect = useMutation({
-    mutationFn: () => request<YoutubeStatus>("/api/youtube/disconnect", {}),
-    onSuccess: (s) => cache.setQueryData(["youtube"], s),
-  });
-  const policy = useMutation({
-    mutationFn: (private_only: boolean) =>
-      request<YoutubeStatus>("/api/youtube/policy", { private_only }),
-    onSuccess: (s) => cache.setQueryData(["youtube"], s),
-  });
-  if (status.isPending)
-    return <p role="status">Loading publishing settings…</p>;
-  if (status.error)
-    return (
-      <p className="error" role="alert">
-        {status.error.message}
-      </p>
-    );
-  const s = status.data;
-  return (
-    <div className="publishing-sections">
-      <section
-        className="panel publishing-section"
-        aria-labelledby="youtube-heading"
-      >
-        <h2 id="youtube-heading">YouTube</h2>
-        {s.account ? (
-          <>
-            <p>
-              Connected to <strong>{s.account.name}</strong>{" "}
-              <small>({s.account.id})</small>
-            </p>
-            <button
-              className="secondary"
-              disabled={disconnect.isPending}
-              onClick={() => disconnect.mutate()}
-            >
-              Disconnect YouTube
-            </button>
-            <p className="field-help">
-              Disconnecting stops further upload requests. It does not delete
-              videos already uploaded. You can revoke Google access in your
-              Google account settings.
-            </p>
-          </>
-        ) : s.configured ? (
-          <>
-            <p>Authorize the YouTube channel your agent will upload to.</p>
-            <button
-              className="primary"
-              disabled={connect.isPending}
-              onClick={() => connect.mutate()}
-            >
-              Connect YouTube
-            </button>
-            <details>
-              <summary>Change Google application credentials</summary>
-              <GoogleConfig />
-            </details>
-          </>
-        ) : (
-          <GoogleConfig />
-        )}
-        <label className="checkbox-label">
-          <input
-            type="checkbox"
-            checked={s.private_only}
-            disabled={policy.isPending}
-            onChange={(e) => policy.mutate(e.target.checked)}
-          />
-          Only allow private uploads
-        </label>
-        <p className="field-help">
-          Keep this enabled for the first test. Google also restricts uploads
-          from unaudited API projects to private visibility.
-        </p>
-        {[connect.error, disconnect.error, policy.error]
-          .filter(Boolean)
-          .map((e, i) => (
-            <p className="error" role="alert" key={i}>
-              {e?.message}
-            </p>
-          ))}
-      </section>
-      <AgentAccess status={s} />
-    </div>
-  );
-}
-function GoogleConfig() {
+export function GoogleConfig() {
   const save = useMutation({
     mutationFn: (body: unknown) =>
       request<YoutubeStatus>("/api/youtube/config", body),
@@ -181,21 +99,14 @@ function GoogleConfig() {
     </form>
   );
 }
-function AgentAccess({ status }: { status: YoutubeStatus }) {
+
+export function ConnectionInstructions({ status }: { status: YoutubeStatus }) {
   const [token, setToken] = useState("");
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState("");
   const access = useMutation({
-    mutationFn: (rotate: boolean) =>
-      request<{ token: string }>(
-        rotate ? "/api/publishing/token/rotate" : "/api/publishing/token",
-        {},
-      ),
+    mutationFn: () => request<{ token: string }>("/api/publishing/token", {}),
     onSuccess: (r) => setToken(r.token),
-  });
-  const save = useMutation({
-    mutationFn: (url: string) =>
-      request<YoutubeStatus>("/api/publishing/bridge", { url }),
-    onSuccess: (s) => cache.setQueryData(["youtube"], s),
   });
   const base = status.bridge_url || "http://127.0.0.1:8788";
   const instructions = `Connect to my AgentWay publishing bridge at ${base}.
@@ -225,157 +136,59 @@ Reuse the same request_id and identical arguments on retries. Use a new request_
 
 A video_url confirms upload completion only. Read GET /v1/publications/{id} after upload and compare actual_privacy with requested_privacy. Only report public publishing success when actual_privacy is public. Report any mismatch. Null actual_privacy means unverified; report visibility_error and retry the status check, never upload again for a verification failure. Current readback verifies visibility only, not the disclosure fields. Upload completion does not mean YouTube has finished processing or classified it as a Short.`;
   return (
-    <section
-      className="panel publishing-section"
-      aria-labelledby="agent-access-heading"
-    >
-      <h2 id="agent-access-heading">Agent connection</h2>
-      <p>
-        Muse runs in the cloud. Run ./run --share for a temporary HTTPS address,
-        or point your own reverse proxy at AgentWay’s agent port,{" "}
-        <code>8788</code>. The management interface on port 8787 stays local.
-      </p>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          save.mutate(String(new FormData(e.currentTarget).get("url") ?? ""));
-        }}
-      >
+    <details className="panel instructions">
+      <summary>Connection instructions</summary>
+      <div className="pad">
         <label>
-          Public HTTPS address
-          <input
-            key={status.bridge_url}
-            name="url"
-            type="url"
-            defaultValue={status.bridge_url}
-            placeholder="https://agentway.example.com"
-          />
+          HTTP endpoint<code className="copy-value">{base}</code>
         </label>
-        <button className="secondary" disabled={save.isPending}>
-          Save address
-        </button>
-      </form>
-      <p className="field-help">
-        Saving an address does not create a tunnel. Local agents can use
-        http://127.0.0.1:8788 directly.
-      </p>
-      <details>
-        <summary>Connection instructions and token</summary>
-        <p>
-          Give the instructions below to Muse. Provide the token through its
-          secure credential prompt. The token permits uploads to your connected
-          channel; Google credentials remain in AgentWay.
-        </p>
+        <label>
+          MCP endpoint<code className="copy-value">{base}/mcp</code>
+        </label>
         <textarea
           aria-label="Agent connection instructions"
           readOnly
           value={instructions}
           rows={8}
         />
-        <button
-          className="secondary"
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(instructions);
-              setCopied(true);
-            } catch {
-              setCopied(false);
-            }
-          }}
-        >
-          {copied ? "Copied" : "Copy instructions"}
-        </button>
-        <div className="button-row">
+        <div className="actions">
           <button
-            className="secondary"
-            disabled={access.isPending}
-            onClick={() => access.mutate(false)}
+            onClick={async () => {
+              try {
+                await navigator.clipboard.writeText(instructions);
+                setCopied(true);
+                setCopyError("");
+              } catch {
+                setCopyError(
+                  "Copy failed. Select and copy the instructions above.",
+                );
+              }
+            }}
           >
-            Show token
+            {copied ? "Copied" : "Copy instructions"}
           </button>
           <button
-            className="secondary"
             disabled={access.isPending}
-            onClick={() => access.mutate(true)}
+            onClick={() => (token ? setToken("") : access.mutate())}
           >
-            Replace token
+            {token ? "Hide token" : "Show token"}
           </button>
         </div>
-        <p className="field-help">
-          Replacing the token immediately disconnects clients using the previous
-          token.
-        </p>
         {token && (
           <label>
             Agent token
             <input readOnly value={token} onFocus={(e) => e.target.select()} />
-            <button className="secondary" onClick={() => setToken("")}>
-              Hide token
-            </button>
+            <span className="muted">
+              Enter this in your agent’s secure credential field.
+            </span>
           </label>
         )}
-      </details>
-      {[save.error, access.error].filter(Boolean).map((e, i) => (
-        <p role="alert" className="error" key={i}>
-          {e?.message}
-        </p>
-      ))}
-    </section>
-  );
-}
-export function UploadRow({ id }: { id: string }) {
-  const { data: p } = useQuery<Publication>({
-    queryKey: ["publication", id],
-    enabled: false,
-  });
-  const retry = useMutation({
-    mutationFn: () => request<Publication>(`/api/publications/${id}/retry`, {}),
-    onSuccess: upsertPublication,
-  });
-  if (!p) return null;
-  return (
-    <div className="row">
-      <div className="row-main">
-        <strong>{p.title}</strong>
-        <small>
-          {
-            {
-              queued: "Queued",
-              uploading: "Uploading",
-              uploaded: "Uploaded",
-              interrupted: "Interrupted",
-            }[p.status]
-          }{" "}
-          · {new Date(p.created_at).toLocaleString()}
-        </small>
-        {p.status === "uploading" && (
-          <progress
-            aria-label={`Upload progress for ${p.title}`}
-            value={p.uploaded_bytes}
-            max={p.total_bytes}
-          />
-        )}
-        {p.video_url && (
-          <a href={p.video_url} target="_blank" rel="noreferrer">
-            Open on YouTube
-          </a>
-        )}
-        {p.error && <p className="error">{p.error}</p>}
-        {retry.error && (
+        {(access.error || copyError) && (
           <p role="alert" className="error">
-            {retry.error.message}
+            {access.error?.message || copyError}
           </p>
         )}
       </div>
-      {p.status === "interrupted" && (
-        <button
-          className="secondary"
-          disabled={retry.isPending}
-          onClick={() => retry.mutate()}
-        >
-          Retry upload
-        </button>
-      )}
-    </div>
+    </details>
   );
 }

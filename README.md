@@ -2,7 +2,7 @@
 
 A personal bridge between the AI agents you already use and the places you publish.
 
-**Status: first Muse-to-YouTube publishing path verified.** The Publishing screen configures Google OAuth, displays upload progress/results, and supplies authenticated HTTP/MCP connection instructions. Media transfer and resumable YouTube uploads are implemented. The user completed a real Muse-to-YouTube upload and confirmed playback and Private visibility. Automated failure/recovery tests additionally use a simulated provider. Cross-agent execution, quota-aware delegation and other publishing destinations remain unimplemented. Saved agent records and tasks still do not execute.
+**Status: Muse-to-YouTube publishing verified for private and public uploads.** The working interface includes Agents, Platforms, Tasks, Activity log and Settings. Configure YouTube in Platforms, obtain agent instructions in Agents, and inspect real uploads and submitted video settings in Tasks. Activity log displays recorded upload steps and errors. The app still has one shared agent connection and one YouTube account; independent agent enrollment, cross-agent execution, quota-aware delegation and other publishing platforms remain unimplemented. The reference prototype under `docs/design` is not served by the app.
 
 ## Run locally
 

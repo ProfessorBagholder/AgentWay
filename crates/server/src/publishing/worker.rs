@@ -33,6 +33,7 @@ impl Publisher {
         self.publish_event(id).await
     }
     async fn upload(&self, id: &str) -> Result<()> {
+        self.check_publish_access().await?;
         let (input, channel, session): (String, String, Option<String>) =
             sqlx::query_as("SELECT input,channel_id,session FROM publications WHERE id=?")
                 .bind(id)
@@ -60,6 +61,7 @@ impl Publisher {
             {
                 bail!("Private-only mode is enabled. This non-private upload was not started.");
             }
+            self.check_publish_access().await?;
             let token = self.access_token(&channel).await?;
             let response = self.0.client.post(&self.0.endpoints.upload)
                 .query(&[("uploadType","resumable"),("part","snippet,status"),("notifySubscribers","false")])
@@ -89,6 +91,7 @@ impl Publisher {
         let mut offset;
         {
             let _guard = self.0.mutation.lock().await;
+            self.check_publish_access().await?;
             let token = self.access_token(&channel).await?;
             let response = self
                 .0
@@ -126,6 +129,7 @@ impl Publisher {
             {
                 bail!("Private-only mode is enabled; this upload is paused");
             }
+            self.check_publish_access().await?;
             let token = self.access_token(&channel).await?;
             let length = CHUNK.min((media.size - offset) as usize);
             let mut bytes = vec![0; length];

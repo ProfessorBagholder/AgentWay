@@ -4,9 +4,9 @@ This branch adds a real YouTube API upload path and an authenticated HTTP/MCP br
 
 ## Start
 
-`./run` builds and starts the app, waits for readiness, and opens the browser. Publishing settings are at http://127.0.0.1:8787/#publishing.
+`./run` builds and starts the app, waits for readiness, and opens the browser. YouTube setup is at http://127.0.0.1:8787/#/platforms/youtube.
 
-For a hosted agent such as Muse, `./run --share` additionally starts a temporary Cloudflare HTTPS tunnel to the **agent listener only**, saves that address in Publishing, and opens the app. No Cloudflare account is needed for a quick tunnel. The address changes when the tunnel is recreated; update the agent's connector then. `./stop` stops both services. Cloudflare carries the agent traffic; use your own HTTPS reverse proxy for a stable address. Never expose the management port through the tunnel.
+For a hosted agent such as Muse, `./run --share` additionally starts a temporary Cloudflare HTTPS tunnel to the **agent listener only**, saves that address under Settings → Agent endpoint, and opens the app. No Cloudflare account is needed for a quick tunnel. The address changes when the tunnel is recreated; update the agent's connector then. `./stop` stops both services. Cloudflare carries the agent traffic; use your own HTTPS reverse proxy for a stable address. Never expose the management port through the tunnel.
 
 The app port defaults to 8787; the agent port defaults to 8788. Override with `--port` and `--bridge-port`. The management app is loopback-only. HTTP/MCP clients authenticate to the separate agent port using a bearer token. HTTPS must terminate at a trusted reverse proxy/tunnel for remote access. Browser-origin requests to the agent listener are rejected.
 
@@ -17,9 +17,9 @@ Quick tunnels are for testing, have provider availability/body-size restrictions
 1. In Google Cloud, enable YouTube Data API v3 in your project.
 2. Configure the OAuth consent screen. If it is in testing mode, add your Google account as a test user.
 3. Create an OAuth client of type **Web application**. Add the exact redirect URI displayed in AgentWay: normally `http://127.0.0.1:8787/api/youtube/callback`.
-4. Enter the client ID and client secret in **Publishing → YouTube**. Do not put them in chat or `.env`.
+4. Enter the client ID and client secret in **Platforms → YouTube**. Do not put them in chat or `.env`.
 5. Click **Connect YouTube** and grant upload and channel-read permissions. Check the returned channel name/ID.
-6. Leave **Only allow private uploads** enabled for the first test.
+6. Leave **Settings → Publishing restrictions → Restrict uploads to private** enabled for the first test.
 
 The extra read scope identifies the actual destination channel. Google tokens, client credentials and resumable session URLs are encrypted in SQLite with ChaCha20-Poly1305. The key is stored separately at `/data/publishing/secret.key` in the Docker data volume with owner-only file permissions. Back up both the database and this key; encryption does not protect against someone who has access to both. Lost keys are not regenerated over an existing key file.
 
@@ -29,7 +29,7 @@ Uploads from unaudited API projects are restricted by YouTube to private visibil
 
 ## Connect Muse
 
-Muse is the personal agent, not Muse Code or Muse Spark. Meta documents custom API/CLI connectors running in Muse's cloud VM. The connection instructions in Publishing describe the supported HTTP operations. Give those instructions to Muse and provide the AgentWay bearer token through Muse's secure credential prompt. Do not paste it into conversation text. The token permits publishing to the connected channel, bounded by the owner's private-only setting. Replacing it invalidates the previous token.
+Muse is the personal agent, not Muse Code or Muse Spark. Meta documents custom API/CLI connectors running in Muse's cloud VM. The connection instructions under Agents → your connection describe the supported HTTP operations. Give those instructions to Muse and provide the AgentWay bearer token through Muse's secure credential prompt. Do not paste it into conversation text. The token permits publishing to the connected channel, bounded by the owner's private-only setting. Replacing it invalidates the previous token.
 
 Once configured, ask Muse to upload a small finished video **privately**. Use an existing file or let Muse create it with its existing tools. Verify the returned URL in YouTube Studio. An `uploaded` result confirms YouTube returned a video ID, not that video processing has completed or that YouTube classified the video as a Short.
 
@@ -64,7 +64,7 @@ Automated tests cover auth boundaries, incomplete media, policy enforcement, con
 
 ## Verify requested visibility
 
-Public and unlisted uploads are supported when the owner disables **Only allow private uploads**. Agents must read `/v1/status` first, use the visibility requested by the user (private when unspecified), and use a new request ID for each new upload. Retries retain the original ID and identical arguments.
+Public and unlisted uploads are supported when the owner disables **Settings → Publishing restrictions → Restrict uploads to private**. Agents must read `/v1/status` first, use the visibility requested by the user (private when unspecified), and use a new request ID for each new upload. Retries retain the original ID and identical arguments.
 
 After upload, `GET /v1/publications/{id}` and MCP `get_publication` return `requested_privacy`, `actual_privacy`, and `visibility_error` alongside existing publication fields. Each status check for a completed video reads its current visibility from YouTube, so manual Studio changes are reflected. A public request is verified only when `actual_privacy` is `public`; a URL or `uploaded` alone is insufficient. A mismatch must be reported to the user.
 
@@ -74,11 +74,13 @@ Mock-provider coverage verifies public requests resulting in private or public v
 
 ## Agents and Tasks
 
-Agents shows the existing publishing connection, with an owner-assigned name and last authenticated bridge request. It does not infer client identity from the shared token or claim that the agent is online. Tracking begins when this version is installed; historical request timestamps are not fabricated. Tasks lists actual publication jobs, updated through per-record SSE events. Legacy saved agent/task rows are preserved in storage but hidden from these operational screens. Browser tests use fixtures and synthetic events and no longer insert placeholder records into a running user's database.
+Agents shows the existing owner-named publishing connection. It does not infer client identity from the shared token or claim that an agent is online. Platform permission changes are enforced at admission, retry and worker transfer boundaries. Disconnect replaces the credential and disables access while preserving uploads; clients must explicitly set up again with the replacement credential. No existing credential or permission changes during app upgrade.
+
+Tasks lists actual publication jobs and submitted video settings. Activity log groups the persisted publication transitions and errors by upload, with paginated history. New events include timestamps; old steps do not acquire invented timestamps. This log does not yet cover every pre-publication or infrastructure error. Legacy saved placeholder agent/task rows remain in storage but do not appear in these screens. Browser tests use intercepted fixtures and never create sample records in the user's database.
 
 ## Exact agent publishing contract
 
-Use **Publishing → Agent connection → Copy instructions** for the current bridge address and complete procedure. Those instructions contain no token; supply the token through the agent's secure credential facility. Existing agents can use the same configured connection and receive the updated instructions without reconnecting or rotating credentials. MCP exposes the same input schema through tools/list.
+Use **Agents → your connection → Connection instructions → Copy instructions** for the current bridge address and complete procedure. Those instructions contain no token; supply the token through the agent's secure credential facility. Existing agents can use the same configured connection and receive the updated instructions without reconnecting or rotating credentials. MCP exposes the same input schema through tools/list.
 
 [Example request](examples/youtube-publish.json) is valid JSON, checked by a Rust regression test. Replace both sample UUIDs: request_id is freshly generated for a new upload; media_id comes from this bridge after the video transfer. Replace all content and both disclosure values appropriately; the sample booleans are not defaults.
 

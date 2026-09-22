@@ -661,3 +661,114 @@ async fn worker_sends_visibility_and_explicit_disclosures_unchanged() {
     worker.await.unwrap();
     server.abort();
 }
+
+async fn admin(p: &Publisher, method: &str, path: &str, value: Value) -> (StatusCode, Value) {
+    let response = p
+        .admin_router()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header("host", "127.0.0.1:8787")
+                .header("content-type", "application/json")
+                .body(Body::from(value.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+}
+#[tokio::test]
+async fn workspace_permissions_and_disconnect_preserve_existing_publications() {
+    let (_dir, p) = fixture().await;
+    account(&p).await;
+    let media = media(&p).await;
+    let request = input(media);
+    let job = p.enqueue(request.clone()).await.unwrap();
+    let original = p.secret("agent_token").await.unwrap();
+    let (status, connection) = admin(
+        &p,
+        "POST",
+        "/api/publishing/connection/access",
+        json!({"publish_enabled":false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(connection["publish_enabled"], false);
+    assert!(
+        p.enqueue(request.clone())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("permission")
+    );
+    assert!(p.retry(&job.id).await.is_err());
+    assert_eq!(
+        call(&p, "GET", "/v1/status", vec![], true).await.0,
+        StatusCode::OK
+    );
+    admin(
+        &p,
+        "POST",
+        "/api/publishing/connection/access",
+        json!({"publish_enabled":true}),
+    )
+    .await;
+    assert_eq!(p.enqueue(request).await.unwrap().id, job.id);
+    assert_eq!(p.secret("agent_token").await.unwrap(), original);
+    let (_, connection) = admin(
+        &p,
+        "POST",
+        "/api/publishing/connection/disconnect",
+        json!({}),
+    )
+    .await;
+    assert_eq!(connection["state"], "Disconnected");
+    assert_eq!(
+        call(&p, "GET", "/v1/status", vec![], true).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_ne!(p.secret("agent_token").await.unwrap(), original);
+    let (_, connection) = admin(&p, "POST", "/api/publishing/connection/enable", json!({})).await;
+    assert_eq!(connection["state"], "Setup incomplete");
+    let old = p
+        .bridge_router()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/status")
+                .header("authorization", format!("Bearer {original}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(old.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(p.list().await.unwrap().len(), 1);
+    assert_eq!(
+        call(&p, "GET", "/v1/status", vec![], true).await.0,
+        StatusCode::OK
+    );
+}
+#[tokio::test]
+async fn workspace_history_and_settings_are_real_and_management_only() {
+    let (_dir, p) = fixture().await;
+    account(&p).await;
+    let job = p.enqueue(input(media(&p).await)).await.unwrap();
+    let path = format!("/api/publications/{}", job.id);
+    let (status, detail) = admin(&p, "GET", &path, Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(detail["settings"]["made_for_kids"], false);
+    assert_eq!(detail["publication"]["id"], job.id);
+    let (_, history) = admin(&p, "GET", &format!("{path}/history"), Value::Null).await;
+    assert_eq!(history["items"].as_array().unwrap().len(), 1);
+    assert!(history["items"][0]["event_at"].is_string());
+    assert_eq!(history["items"][0]["publication"]["status"], "queued");
+    assert!(!history.to_string().contains("refresh-secret"));
+    assert!(history["items"][0]["publication"].get("session").is_none());
+    assert_eq!(
+        call(&p, "GET", &path, vec![], true).await.0,
+        StatusCode::NOT_FOUND
+    );
+}

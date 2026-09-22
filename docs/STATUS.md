@@ -3,14 +3,16 @@
 ## Implemented and locally tested
 
 - Async Rust/Axum server, SQLx/SQLite migrations and persistent event replay.
-- Agents shows the owner-named publishing connection and timestamped authenticated bridge activity. Shared credentials cannot distinguish individual clients or expose external agent work.
+- The production interface has Agents, Platforms, Tasks, Activity log and Settings, using the approved prototype layout with the original dark palette and persisted light/dark preference.
+- Agents manages the existing owner-named publishing connection: instructions, publishing permission and explicit disconnect. Disconnect revokes its shared token and preserves history. Independent per-agent credentials/enrollment remain unimplemented; shared credentials cannot identify individual clients.
 - Tasks shows real publishing jobs, progress, errors, retries and YouTube links. Legacy saved agent/task records remain stored but are no longer presented as live activity.
-- Navigation uses tab-specific hashes and restores tabs on refresh and browser history. Publishing contains connection/settings controls; upload jobs appear only in Tasks.
+- Hash routes support details, task filters, refresh and browser history. Old #publishing links open YouTube setup. Agents owns connection instructions; Platforms owns YouTube OAuth; Settings owns appearance, external endpoint and private-only restriction.
+- Tasks shows submitted video settings and offers on-demand YouTube visibility verification. Activity log groups persisted publication transitions and errors by upload with paginated steps. New publication events include timestamps; older step timestamps are unavailable. It does not yet cover all authentication, media-transfer, OAuth or infrastructure failures.
 - Publishing: Google OAuth with PKCE and browser-bound single-use state, encrypted credentials, connected channel identification, private-only owner policy, token rotation, media transfer, resumable YouTube upload queue and saved results.
 - Agent publication status reads current YouTube visibility and reports requested versus actual privacy; verification errors preserve completed uploads. Covered with mock-provider tests.
 - Versioned agent onboarding through MCP initialization and authenticated status, with a generated publishing schema and explicit per-video disclosure requirements.
 - Separate authenticated HTTP/MCP agent listener; management and credentials remain loopback-only.
-- Publishing UI consumes targeted status/record events without unrelated refetches.
+- Resource-level SSE updates patch records and opened journals without page reloads or unrelated refetches.
 - Compose launcher with optional temporary HTTPS tunnel for a hosted agent; `./run --share`.
 
 ## Live validation

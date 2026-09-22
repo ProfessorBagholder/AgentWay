@@ -3,44 +3,60 @@ import { test, expect } from "@playwright/test";
 test("publishing loads real account state and keeps navigation and credentials local", async ({
   page,
 }) => {
+  await page.route("**/api/publishing/connection", (r) =>
+    r.fulfill({
+      json: {
+        id: "publishing",
+        name: "Muse",
+        state: "Connected",
+        publish_enabled: true,
+        activity: null,
+      },
+    }),
+  );
   await page.goto("/#publishing");
   await expect(
     page.getByRole("heading", { name: "YouTube", exact: true }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Agent connection", exact: true }),
-  ).toBeVisible();
-  await expect(page.getByLabel("Only allow private uploads")).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Uploads", exact: true }),
-  ).toHaveCount(0);
   await page
-    .getByText("Connection instructions and token", { exact: true })
+    .getByRole("navigation")
+    .getByRole("link", { name: "Agents", exact: true })
     .click();
+  await page.getByRole("link", { name: "Muse", exact: true }).click();
+  await page.getByText("Connection instructions", { exact: true }).click();
   await expect(page.getByLabel("Agent connection instructions")).toHaveValue(
     /POST \/v1\/youtube\/publish/,
   );
   await expect(page.getByLabel("Agent connection instructions")).toHaveValue(
-    /private, unlisted, or public/,
+    /agent_guidance/,
   );
   await expect(page.getByLabel("Agent connection instructions")).toHaveValue(
-    /compare actual_privacy with requested_privacy/,
+    /made_for_kids/,
   );
   const documents: string[] = [];
   page.on("request", (r) => {
     if (r.isNavigationRequest()) documents.push(r.url());
   });
-  await page.getByRole("button", { name: "Agents", exact: true }).click();
+  await page
+    .getByRole("navigation")
+    .getByRole("link", { name: "Agents", exact: true })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Agents", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Tasks", exact: true }).click();
+  await page
+    .getByRole("navigation")
+    .getByRole("link", { name: "Tasks", exact: true })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Tasks", exact: true }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Publishing", exact: true }).click();
+  await page
+    .getByRole("navigation")
+    .getByRole("link", { name: "Platforms", exact: true })
+    .click();
   await expect(
-    page.getByRole("heading", { name: "YouTube", exact: true }),
+    page.getByRole("heading", { name: "Platforms", exact: true }),
   ).toBeVisible();
   expect(documents).toEqual([]);
   await page.setViewportSize({ width: 390, height: 844 });

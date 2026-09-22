@@ -51,6 +51,7 @@ pub struct Callback {
 impl Publisher {
     pub fn admin_router(&self) -> Router {
         Router::new()
+            .merge(super::workspace::routes())
             .route("/api/youtube", get(status))
             .route("/api/youtube/config", post(config))
             .route("/api/youtube/connect", post(connect))
@@ -94,6 +95,15 @@ async fn authenticate(State(p): State<Publisher>, req: Request, next: Next) -> R
     // Browser cross-origin use is unsupported; this API is for agent HTTP clients.
     if req.headers().contains_key("origin") {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    if p.setting("agent_disconnected")
+        .await
+        .ok()
+        .flatten()
+        .as_deref()
+        == Some("true")
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
     }
     let actual = req
         .headers()
@@ -141,9 +151,7 @@ async fn authenticate(State(p): State<Publisher>, req: Request, next: Next) -> R
     response
 }
 async fn connection(State(p): State<Publisher>) -> Api<Value> {
-    Ok(Json(
-        json!({"name":p.setting("agent_connection_name").await?.unwrap_or_else(|| "Publishing connection".into()), "activity": p.activity().await?}),
-    ))
+    Ok(Json(p.workspace_connection().await?))
 }
 #[derive(Deserialize)]
 struct ConnectionName {
