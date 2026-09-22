@@ -321,6 +321,24 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
         .to_owned();
     let response = mcp_json(init).await;
     assert!(response["result"]["capabilities"]["tools"].is_object());
+    assert_eq!(response["result"]["instructions"], guidance::INSTRUCTIONS);
+    let status: Value = client
+        .get(url.replace("/mcp", "/v1/status"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(status["agent_guidance"], guidance::payload());
+    let required = status["agent_guidance"]["publish_schema"]["required"]
+        .as_array()
+        .unwrap();
+    assert!(required.contains(&json!("made_for_kids")));
+    assert!(required.contains(&json!("contains_synthetic_media")));
     client
         .post(&url)
         .bearer_auth(&token)
@@ -353,6 +371,10 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
         .json(&json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"youtube_status","arguments":{}}})).send().await.unwrap()).await;
     assert_eq!(called["result"]["structuredContent"]["private_only"], true);
     assert!(called["result"]["structuredContent"]["account"].is_null());
+    assert_eq!(
+        called["result"]["structuredContent"]["agent_guidance"],
+        status["agent_guidance"]
+    );
     server.abort();
 }
 
@@ -477,4 +499,165 @@ async fn activity_tracks_authenticated_requests_and_persists_events() {
     let event: BridgeActivity = serde_json::from_str(&payload).unwrap();
     assert_eq!(event.revision, next.revision);
     assert!(!payload.contains(&p.secret("agent_token").await.unwrap()));
+}
+
+#[tokio::test]
+async fn documented_request_requires_explicit_declarations_and_rejects_unknown_settings() {
+    let (_dir, p) = fixture().await;
+    account(&p).await;
+    let mut example: Value = serde_json::from_str(include_str!(
+        "../../../../docs/examples/youtube-publish.json"
+    ))
+    .unwrap();
+    example["media_id"] = json!(media(&p).await);
+    for field in ["made_for_kids", "contains_synthetic_media"] {
+        let mut missing = example.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert_eq!(
+            call(
+                &p,
+                "POST",
+                "/v1/youtube/publish",
+                serde_json::to_vec(&missing).unwrap(),
+                true
+            )
+            .await
+            .0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let mut wrong_type = example.clone();
+        wrong_type[field] = json!("false");
+        assert_eq!(
+            call(
+                &p,
+                "POST",
+                "/v1/youtube/publish",
+                serde_json::to_vec(&wrong_type).unwrap(),
+                true
+            )
+            .await
+            .0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+    let mut unknown = example.clone();
+    unknown["tags"] = json!(["unsupported"]);
+    assert_eq!(
+        call(
+            &p,
+            "POST",
+            "/v1/youtube/publish",
+            serde_json::to_vec(&unknown).unwrap(),
+            true
+        )
+        .await
+        .0,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert!(p.list().await.unwrap().is_empty());
+    let (status, first) = call(
+        &p,
+        "POST",
+        "/v1/youtube/publish",
+        serde_json::to_vec(&example).unwrap(),
+        true,
+    )
+    .await;
+    assert!(status.is_success());
+    let (_, retried) = call(
+        &p,
+        "POST",
+        "/v1/youtube/publish",
+        serde_json::to_vec(&example).unwrap(),
+        true,
+    )
+    .await;
+    assert_eq!(first["id"], retried["id"]);
+    example["contains_synthetic_media"] = json!(false);
+    assert_eq!(
+        call(
+            &p,
+            "POST",
+            "/v1/youtube/publish",
+            serde_json::to_vec(&example).unwrap(),
+            true
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(p.list().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn worker_sends_visibility_and_explicit_disclosures_unchanged() {
+    let (_dir, mut p) = fixture().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let captured = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+    let mock = Router::new()
+        .route(
+            "/token",
+            post(|| async {
+                Json(json!({"access_token":"access","token_type":"Bearer","expires_in":3600}))
+            }),
+        )
+        .route(
+            "/upload/youtube/v3/videos",
+            post({
+                let captured = captured.clone();
+                move |axum::extract::Query(query): axum::extract::Query<
+                    std::collections::HashMap<String, String>,
+                >,
+                      Json(body): Json<Value>| {
+                    let captured = captured.clone();
+                    async move {
+                        assert_eq!(query["part"], "snippet,status");
+                        assert_eq!(query["notifySubscribers"], "false");
+                        captured.lock().unwrap().push(body);
+                        // Stop before transferring bytes; only metadata submission is under test.
+                        StatusCode::SERVICE_UNAVAILABLE
+                    }
+                }
+            }),
+        );
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    Arc::get_mut(&mut p.0).unwrap().endpoints.token = format!("{base}/token");
+    Arc::get_mut(&mut p.0).unwrap().endpoints.upload = format!("{base}/upload/youtube/v3/videos");
+    account(&p).await;
+    p.set("private_only", "false").await.unwrap();
+    let media_id = media(&p).await;
+    let worker = p.start_worker();
+    for privacy in ["private", "unlisted", "public"] {
+        for (kids, synthetic) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mut request = input(media_id.clone());
+            request.privacy = privacy.into();
+            request.made_for_kids = kids;
+            request.contains_synthetic_media = synthetic;
+            let job = p.enqueue(request).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if p.publication(&job.id).await.unwrap().status == "interrupted" {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let body = captured.lock().unwrap().last().unwrap().clone();
+            assert_eq!(
+                body["snippet"],
+                json!({"title":"Test video","description":"","categoryId":"24"})
+            );
+            assert_eq!(
+                body["status"],
+                json!({"privacyStatus":privacy,"selfDeclaredMadeForKids":kids,"containsSyntheticMedia":synthetic})
+            );
+        }
+    }
+    assert_eq!(captured.lock().unwrap().len(), 12);
+    p.0.shutdown.cancel();
+    worker.await.unwrap();
+    server.abort();
 }

@@ -8,6 +8,7 @@
 - Navigation uses tab-specific hashes and restores tabs on refresh and browser history. Publishing contains connection/settings controls; upload jobs appear only in Tasks.
 - Publishing: Google OAuth with PKCE and browser-bound single-use state, encrypted credentials, connected channel identification, private-only owner policy, token rotation, media transfer, resumable YouTube upload queue and saved results.
 - Agent publication status reads current YouTube visibility and reports requested versus actual privacy; verification errors preserve completed uploads. Covered with mock-provider tests.
+- Versioned agent onboarding through MCP initialization and authenticated status, with a generated publishing schema and explicit per-video disclosure requirements.
 - Separate authenticated HTTP/MCP agent listener; management and credentials remain loopback-only.
 - Publishing UI consumes targeted status/record events without unrelated refetches.
 - Compose launcher with optional temporary HTTPS tunnel for a hosted agent; `./run --share`.

@@ -49,7 +49,7 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "Upload finished media to the connected YouTube channel. Requires a completed media PUT. Returns a persisted job; use get_publication until uploaded or interrupted. Reuse request_id on retries. A video_url confirms upload only. Use get_publication and confirm actual_privacy matches requested_privacy before claiming the requested visibility. YouTube still processes uploaded videos, and determines Shorts classification."
+        description = "Upload finished media to the connected YouTube channel. Requires a completed media PUT. Returns a persisted job; use get_publication until uploaded or interrupted. Reuse request_id on retries. A video_url confirms upload only. Use get_publication and confirm actual_privacy matches requested_privacy before claiming the requested visibility. YouTube still processes uploaded videos, and determines Shorts classification. Explicit made_for_kids and contains_synthetic_media booleans are required. Current category is Entertainment (24); subscriber notifications are disabled. Only schema fields are supported; report any required unsupported setting before uploading. Disclosure readback and metadata edits are not implemented."
     )]
     async fn publish_youtube(
         &self,
@@ -95,6 +95,7 @@ impl PublishingTools {
 impl ServerHandler for PublishingTools {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions(guidance::INSTRUCTIONS)
     }
 }
 impl Publisher {

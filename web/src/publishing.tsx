@@ -198,7 +198,32 @@ function AgentAccess({ status }: { status: YoutubeStatus }) {
     onSuccess: (s) => cache.setQueryData(["youtube"], s),
   });
   const base = status.bridge_url || "http://127.0.0.1:8788";
-  const instructions = `Connect to my AgentWay publishing bridge at ${base}. Authenticate with a bearer token supplied through your secure credential prompt. Never ask me to paste Google credentials into chat. Read GET /v1/status and respect private_only. Choose privacy from private, unlisted, or public as requested by the user; default to private when unspecified. If private_only is true, non-private uploads are blocked until the owner changes the setting. To transfer a finished video, POST /v1/media with {"size":<exact bytes>,"mime":"video/mp4"}, then PUT raw bytes to the returned upload_path using the same bearer token. POST /v1/youtube/publish with {"request_id":<new UUID>,"media_id":<returned ID>,"title":<title>,"description":<description>,"privacy":<chosen visibility>,"made_for_kids":false,"contains_synthetic_media":<appropriate boolean>}. Reuse the same request_id and identical arguments on retries. Poll GET /v1/publications/{id} every five seconds while queued or uploading. Stop and report an interrupted upload; POST /v1/publications/{id}/retry resumes the same session. A video_url confirms upload completion only. Read GET /v1/publications/{id} after upload and compare actual_privacy with requested_privacy. Only report public publishing success when actual_privacy is public. Report any mismatch. Null actual_privacy means unverified; report visibility_error and retry the status check, never upload again for a verification failure. Use a new request_id for a new upload; never change arguments on an existing request_id. Upload completion does not mean YouTube has finished processing or classified it as a Short. MCP clients can use ${base}/mcp with the same Authorization: Bearer token.`;
+  const instructions = `Connect to my AgentWay publishing bridge at ${base}.
+
+AUTHENTICATION
+Use Authorization: Bearer <token> on every HTTP request, including the media PUT. Obtain the token through your secure credential prompt; never ask for Google credentials in chat. MCP clients use ${base}/mcp with the same bearer token and discover the tool schemas.
+
+BEFORE UPLOADING
+Read GET /v1/status (MCP: youtube_status). Follow the returned agent_guidance instructions and publish_schema; remember its version and revisit changed guidance. Briefly introduce the supported publishing choices to the user on first use, reuse established preferences, and ask only for unresolved decisions. Confirm the intended channel and respect private_only. Choose privacy from private, unlisted, or public as requested by the user; default to private when unspecified. If private_only is true, non-private uploads are blocked. Do not silently change the requested visibility.
+
+VIDEO TRANSFER
+POST /v1/media with {"size":<exact byte count>,"mime":"video/mp4"} (MCP: create_media_upload). PUT the complete raw file bytes to the returned upload_path on this bridge, using the same bearer token. Do not send a filesystem path, download URL, base64 or multipart body. Media must finish uploading before publication. AgentWay accepts video/mp4, video/quicktime and video/webm, up to 2 GiB; the tunnel may impose a lower limit.
+
+PUBLISH REQUEST
+POST /v1/youtube/publish (MCP: publish_youtube) with:
+{"request_id":<new UUID>,"media_id":<returned ID>,"title":<title>,"description":<description>,"privacy":<chosen visibility>,"made_for_kids":<explicit boolean>,"contains_synthetic_media":<explicit boolean>}
+
+SETTINGS
+- title: required, 1–100 characters; description: optional, at most 5000 UTF-8 bytes. Neither may contain < or >.
+- made_for_kids: required. Set according to the video's intended audience; never hard-code false or infer it from the channel's name.
+- contains_synthetic_media: required. Declare realistic altered or synthetic content according to YouTube's guidance: https://support.google.com/youtube/answer/14328491. AI assistance with a script alone does not automatically require disclosure. The agent determines the value from the content and user instructions; AgentWay does not inspect the video to decide it.
+- Both declarations must be JSON true or false, not strings or omitted fields. Resolve unknown declarations before submission.
+- Only the seven fields above are supported. Category is currently fixed to Entertainment (24), and subscriber notifications are disabled. Tags, scheduling, paid-promotion settings, language, thumbnails, captions, playlists and post-upload edits are not supported by this bridge yet. If the user requires an unsupported setting, report that limitation before uploading; do not omit it silently or claim it was applied.
+
+RETRIES AND RESULTS
+Reuse the same request_id and identical arguments on retries. Use a new request_id for a genuinely new upload; never change arguments on an existing request_id. Save the returned publication id. Poll GET /v1/publications/{id} (MCP: get_publication) every five seconds while queued or uploading. Stop and report interrupted jobs; POST /v1/publications/{id}/retry (MCP: retry_publication) resumes the same job. Do not create a new request to recover an uncertain or expired upload session.
+
+A video_url confirms upload completion only. Read GET /v1/publications/{id} after upload and compare actual_privacy with requested_privacy. Only report public publishing success when actual_privacy is public. Report any mismatch. Null actual_privacy means unverified; report visibility_error and retry the status check, never upload again for a verification failure. Current readback verifies visibility only, not the disclosure fields. Upload completion does not mean YouTube has finished processing or classified it as a Short.`;
   return (
     <section
       className="panel publishing-section"

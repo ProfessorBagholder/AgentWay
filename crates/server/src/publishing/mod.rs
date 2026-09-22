@@ -1,3 +1,4 @@
+mod guidance;
 mod http;
 mod mcp;
 mod oauth;
@@ -83,13 +84,18 @@ pub struct PublishInput {
     /// Stable UUID. Reuse on retries; never generate a new ID for the same upload.
     pub request_id: String,
     pub media_id: String,
+    /// 1–100 characters; no < or >.
     pub title: String,
     #[serde(default)]
+    /// At most 5000 UTF-8 bytes; no < or >. Defaults to empty.
     pub description: String,
     /// private, unlisted, or public. Subject to the owner's private-only setting.
     #[serde(default = "private")]
     pub privacy: String,
+    /// Required audience declaration. True if child-directed; do not default from agent identity.
     pub made_for_kids: bool,
+    /// Required realistic altered/synthetic content declaration. AI script assistance alone is not sufficient.
+    /// See https://support.google.com/youtube/answer/14328491.
     pub contains_synthetic_media: bool,
 }
 fn private() -> String {
@@ -190,7 +196,7 @@ impl Publisher {
                 .fetch_optional(&self.0.db)
                 .await?;
         Ok(
-            json!({"configured": self.setting("client_id").await?.is_some(), "account": account.map(|(id,name)| json!({"id":id,"name":name})), "private_only": self.setting("private_only").await?.as_deref() != Some("false"), "bridge_url":self.setting("bridge_url").await?.unwrap_or_default()}),
+            json!({"configured": self.setting("client_id").await?.is_some(), "account": account.map(|(id,name)| json!({"id":id,"name":name})), "private_only": self.setting("private_only").await?.as_deref() != Some("false"), "bridge_url":self.setting("bridge_url").await?.unwrap_or_default(), "agent_guidance":guidance::payload()}),
         )
     }
     pub async fn activity(&self) -> Result<Option<BridgeActivity>> {

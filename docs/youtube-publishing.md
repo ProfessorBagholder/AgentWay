@@ -1,6 +1,6 @@
 # YouTube publishing with an existing agent
 
-This branch adds a real YouTube API upload path and an authenticated HTTP/MCP bridge. The user has verified the HTTP path with Muse and a real private YouTube upload. AgentWay does not generate, edit or transcode the video.
+This branch adds a real YouTube API upload path and an authenticated HTTP/MCP bridge. The user has verified the HTTP path with Muse and real private and public YouTube uploads. AgentWay does not generate, edit or transcode the video.
 
 ## Start
 
@@ -75,3 +75,35 @@ Mock-provider coverage verifies public requests resulting in private or public v
 ## Agents and Tasks
 
 Agents shows the existing publishing connection, with an owner-assigned name and last authenticated bridge request. It does not infer client identity from the shared token or claim that the agent is online. Tracking begins when this version is installed; historical request timestamps are not fabricated. Tasks lists actual publication jobs, updated through per-record SSE events. Legacy saved agent/task rows are preserved in storage but hidden from these operational screens. Browser tests use fixtures and synthetic events and no longer insert placeholder records into a running user's database.
+
+## Exact agent publishing contract
+
+Use **Publishing → Agent connection → Copy instructions** for the current bridge address and complete procedure. Those instructions contain no token; supply the token through the agent's secure credential facility. Existing agents can use the same configured connection and receive the updated instructions without reconnecting or rotating credentials. MCP exposes the same input schema through tools/list.
+
+[Example request](examples/youtube-publish.json) is valid JSON, checked by a Rust regression test. Replace both sample UUIDs: request_id is freshly generated for a new upload; media_id comes from this bridge after the video transfer. Replace all content and both disclosure values appropriately; the sample booleans are not defaults.
+
+| Field | Required | Meaning / constraints |
+| --- | --- | --- |
+| request_id | Yes | UUID for one logical upload. Retried submissions use the same UUID and identical input. |
+| media_id | Yes | UUID returned by create_media_upload / POST /v1/media, with completed raw-byte PUT. |
+| title | Yes | Nonempty after trimming, at most 100 characters; no angle brackets. |
+| description | No | Defaults to empty; at most 5000 UTF-8 bytes, no angle brackets. |
+| privacy | No | private, unlisted or public; defaults to private. Owner policy may reject non-private. |
+| made_for_kids | Yes | Explicit JSON boolean declaring whether the video is child-directed. |
+| contains_synthetic_media | Yes | Explicit JSON boolean for realistic altered/synthetic content disclosure. |
+
+YouTube's disclosure guidance distinguishes realistic altered/synthetic content from production assistance such as script drafting. The creating agent determines the appropriate declaration from the content and owner instructions; the bridge transports it. If the agent cannot determine a required declaration, resolve that before submission. See [YouTube guidance](https://support.google.com/youtube/answer/14328491).
+
+**Current limits:** these are the only supported publish fields. Category is fixed to Entertainment (24); subscriber notification is false. No tags, publication scheduling, paid-promotion control, language setting, thumbnail/caption upload, playlist association or metadata editing is exposed yet. Unknown input fields are rejected. A required unsupported setting is a pre-upload capability gap, not permission to omit it. The design specification describes future support, not current functionality.
+
+The worker sends audience and synthetic declarations with the initial upload metadata, together with requested visibility. Completion/readback currently verifies visibility only. Do not tell users that declarations were independently read back, processing finished, or Shorts classification was confirmed.
+
+### Compatibility boundary
+
+The workspace design under docs/design/workspace-preview is isolated from the deployed React app. This contract update does not change the upload schema, endpoint paths, media limits, owner policy, stored request serialization, session recovery, OAuth scope or credentials. Existing Muse requests remain valid. New metadata fields must be introduced in a separately tested change that preserves old persisted inputs and idempotency behavior.
+
+### Automatic agent onboarding
+
+MCP initialization returns server instructions. Authenticated `GET /v1/status` and the MCP `youtube_status` tool return the same instructions under `agent_guidance`, with a version and a publishing JSON Schema generated from the server's request type. Existing status fields remain unchanged. HTTP clients must call status to receive this guidance; this is not an unsolicited push message.
+
+The instructions ask agents to briefly introduce publishing options on first use, use established user preferences, ask only for missing decisions, and explain unsupported settings before upload. Clients can remember the guidance version to avoid repeated onboarding. AgentWay cannot guarantee an external agent follows prose instructions; required booleans, allowed fields and publishing policy are enforced by the server. No new credential or reconnection is required for HTTP clients to read updated guidance; MCP clients receive initialization instructions on a new session and can read guidance through status in an existing session.
