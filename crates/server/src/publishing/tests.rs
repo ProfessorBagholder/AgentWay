@@ -1477,10 +1477,11 @@ async fn podcasts_preserve_settings_and_never_repeat_ambiguous_inserts() {
         .route("/token", post(|| async { Json(json!({"access_token":"access","token_type":"Bearer","expires_in":3600})) }))
         .route("/playlists", get(|Query(q): Query<HashMap<String,String>>| async move {
             let id = q.get("id").map(String::as_str).unwrap_or("show");
-            Json(json!({"items":[{"id":id,"snippet":{"channelId":if id=="foreign" {"other"} else {"channel"},"title":"Existing show"},"status":{"privacyStatus":"unlisted","podcastStatus":if id=="enabled" {"enabled"} else {"unspecified"}}}],"nextPageToken":"next-page"}))
+            Json(json!({"items":[{"id":id,"snippet":{"channelId":if id=="foreign" {"other"} else {"channel"},"title":"Existing show","description":"Keep this description","defaultLanguage":"en"},"status":{"privacyStatus":"unlisted","podcastStatus":if id=="enabled" {"enabled"} else {"unspecified"}}}],"nextPageToken":"next-page"}))
         }).post(move || { let c=counter.clone(); async move {c.fetch_add(1,Ordering::SeqCst); StatusCode::BAD_GATEWAY} })
-          .put(|Json(body):Json<Value>| async move {
-              assert!(body.get("snippet").is_none());
+          .put(|Query(query):Query<HashMap<String,String>>, Json(body):Json<Value>| async move {
+              assert_eq!(query["part"], "snippet,status");
+              assert_eq!(body["snippet"],json!({"title":"Existing show","description":"Keep this description","defaultLanguage":"en"}));
               assert_eq!(body["status"]["privacyStatus"],"unlisted");
               assert_eq!(body["status"]["podcastStatus"],"enabled");
               Json(body)

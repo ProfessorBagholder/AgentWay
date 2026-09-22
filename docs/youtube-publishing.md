@@ -195,7 +195,7 @@ Setup sequence:
 1. List existing playlists and select the intended show, or `create_playlist` with `title`, `description` and `privacy`. Save the returned `resource.id`.
 2. Add selected full episodes using `add_episode` as described below. This works on an ordinary playlist before podcast designation.
 3. Reserve a cover using `POST /v1/media` with exact `size` and `mime` (`image/png` or `image/jpeg`), then PUT raw bytes with the same bearer authentication. Covers must be square and at most 2 MiB; 1280×1280 is recommended. Call `set_cover` with `playlist_id` and `media_id`. Existing hero artwork is updated; otherwise artwork is inserted. Staged covers can be removed using the existing media DELETE endpoint after success.
-4. Call `enable_podcast` with `playlist_id`. YouTube requires a playlist image first. This updates only podcast status and preserves playlist privacy, title, description and membership.
+4. Call `enable_podcast` with `playlist_id`. YouTube requires a playlist image first. The update includes the required existing title and preserves description, language, privacy and membership.
 Episode assignment: call `add_episode` for each existing full episode using `playlist_id`, YouTube `video_id`, `full_episode: true`, and optional zero-based `position`. Omit position to append. Existing membership is returned without duplication. Existing entries are not reordered. Repeat this step for future uploaded/processed episodes.
 
 Example operation (replace IDs with the actual connected resources):

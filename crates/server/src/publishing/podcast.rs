@@ -237,9 +237,17 @@ impl Publisher {
                 let privacy = item["status"]["privacyStatus"]
                     .as_str()
                     .ok_or_else(|| anyhow::anyhow!("Missing playlist privacy"))?;
-                // Update only status, preserving privacy. YouTube rejects enabling without a square image.
-                self.0.client.put(&self.0.endpoints.playlists).query(&[("part", "status")])
-                    .json(&json!({"id":playlist_id,"status":{"privacyStatus":privacy,"podcastStatus":"enabled"}}))
+                // playlists.update requires snippet.title even for podcast designation.
+                // Echo only the mutable snippet fields, preserving the current values.
+                let title = item["snippet"]["title"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Missing playlist title; update is unsafe"))?;
+                let mut snippet = json!({"title":title,"description":item["snippet"]["description"].as_str().unwrap_or("")});
+                if let Some(language) = item["snippet"]["defaultLanguage"].as_str() {
+                    snippet["defaultLanguage"] = json!(language);
+                }
+                self.0.client.put(&self.0.endpoints.playlists).query(&[("part", "snippet,status")])
+                    .json(&json!({"id":playlist_id,"snippet":snippet,"status":{"privacyStatus":privacy,"podcastStatus":"enabled"}}))
             }
             PodcastAction::AddEpisode {
                 playlist_id,
