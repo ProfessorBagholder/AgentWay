@@ -60,9 +60,15 @@ def main():
         def request(method, path, data=b"", headers=None):
             conn = http.client.HTTPConnection("127.0.0.1", active_port, timeout=20)
             try:
-                conn.request(method, path, body=data, headers={
-                    "Tus-Resumable": "1.0.0", **(headers or {})
-                })
+                try:
+                    conn.request(method, path, body=data, headers={
+                        "Tus-Resumable": "1.0.0", **(headers or {})
+                    })
+                except BrokenPipeError:
+                    # A server can reject headers before consuming a large body.
+                    # Read and assert its actual response; never count the socket
+                    # error itself as a successful conflict/rejection test.
+                    pass
                 response = conn.getresponse()
                 result = response.status, dict(response.getheaders()), response.read()
                 return result
