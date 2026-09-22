@@ -217,3 +217,7 @@ Dark is the initial default, using the original slate background (#11151b), side
 ## Platforms screen revision
 
 The user-facing section is **Platforms**. List one row per connected account using Platform, Account, Status and Agents, displaying actual agent names. Reflow all four fields at narrow widths. Selecting the row opens platform-led detail with account, connection state and agent access. Remove format subtitles, category/default-visibility dropdowns and public-publishing checkboxes from this screen. Agents provide video-specific settings through publishing requests; that API requirement remains. This replaces prior destination-screen UI/defaults recommendations.
+
+## Agent connection controls revision
+
+For a healthy connection, show one Connected badge, platform account permissions and a secondary Disconnect action. Remove Pause access, Reconnect and the repeated Access/Authorized row. Only show a recovery action when an actual failure requires it. In the production implementation, Disconnect revokes that connection’s credentials and grants, retains task/history records, and leaves other agents intact. The static design only updates sample state; it does not revoke the live Muse connection.

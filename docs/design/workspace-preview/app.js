@@ -6,7 +6,7 @@ const agents = [
     name: "Podcast coordinator",
     product: "Muse",
     account: "Personal account",
-    state: "Authorized",
+    state: "Connected",
     delivery: "Outbound requests",
     capacity: "Not reported",
     access: true,
@@ -16,7 +16,7 @@ const agents = [
     name: "Episode editor",
     product: "Claude agents",
     account: "Podcast workspace",
-    state: "Authorized",
+    state: "Connected",
     delivery: "Worker capability unverified",
     capacity: "Shared allowance · not reported",
     access: false,
@@ -26,7 +26,7 @@ const agents = [
     name: "Clip writer",
     product: "Claude agents",
     account: "Podcast workspace",
-    state: "Authorized",
+    state: "Connected",
     delivery: "Worker capability unverified",
     capacity: "Shared allowance · not reported",
     access: false,
@@ -94,11 +94,12 @@ function agentList() {
 function agentDetail(id) {
   const a = agents.find((x) => x.id === id);
   if (!a) return missing();
+  const connected = a.state === "Connected";
   const hasUsage = a.capacity && !/not reported/i.test(a.capacity);
   return (
     back("agents", "Agents") +
     heading(escape(agentLabel(a.product)), "", badge(a.state)) +
-    `<div class="${hasUsage ? "grid" : "narrow"}"><div><section class="panel"><div class="panel-title"><h2>Connection</h2></div><div class="pad">${kv("Access", a.state)}<div class="actions"><button data-action="toggle" data-id="${id}">${a.state === "Paused" ? "Resume access" : "Pause access"}</button>${link("agents/connect", "Reconnect")}</div></div></section><section class="panel"><div class="panel-title"><h2>Permissions</h2></div><div class="pad"><label class="check"><input type="checkbox" id="publish" ${a.access ? "checked" : ""}> Publish to Professor Bagholder · YouTube</label><label class="check"><input type="checkbox" id="delegate" ${(a.delegate ?? id === "muse") ? "checked" : ""}> Delegate work to Episode editor and Clip writer</label><button data-action="save-access" data-id="${id}">Save permissions</button></div></section></div>${hasUsage ? `<div><section class="panel"><div class="panel-title"><h2>Usage limits</h2></div><div class="pad"><h3>${escape(a.capacity)}</h3></div></section></div>` : ""}</div>`
+    `<div class="narrow">${connected ? `<section class="panel"><div class="panel-title"><h2>Platform permissions</h2></div><div class="pad"><h3>YouTube</h3><p>Professor Bagholder</p><label class="check"><input type="checkbox" id="publish" ${a.access ? "checked" : ""}>Publish videos</label><div class="actions"><button data-action="save-access" data-id="${id}">Save permissions</button></div></div></section><button class="danger" data-action="disconnect" data-id="${id}">Disconnect</button>` : ""}${hasUsage ? `<section class="panel"><div class="panel-title"><h2>Usage limits</h2></div><div class="pad">${escape(a.capacity)}</div></section>` : ""}</div>`
   );
 }
 function connect() {
@@ -505,10 +506,12 @@ main.addEventListener("click", (e) => {
   const b = e.target.closest("[data-action]");
   if (!b) return;
   const a = agents.find((a) => a.id === b.dataset.id);
-  if (b.dataset.action === "toggle") {
-    a.state = a.state === "Paused" ? "Authorized" : "Paused";
+  if (b.dataset.action === "disconnect" && a) {
+    a.state = "Disconnected";
+    a.access = false;
+    a.delegate = false;
     render();
-    notice(`${a.name}: ${a.state.toLowerCase()} in preview only.`);
+    notice(`${agentLabel(a.product)} disconnected.`);
   }
   if (b.dataset.action === "export-events") {
     const events = operationEvents(b.dataset.task || undefined);
@@ -525,8 +528,7 @@ main.addEventListener("click", (e) => {
   }
   if (b.dataset.action === "save-access") {
     a.access = document.querySelector("#publish").checked;
-    a.delegate = document.querySelector("#delegate").checked;
-    notice("Permissions saved in this preview only.");
+    notice("Permissions saved.");
   }
   if (b.dataset.action === "previous") {
     wizard.step--;
@@ -563,7 +565,7 @@ main.addEventListener("submit", (e) => {
       name: wizard.name,
       product: wizard.product,
       account: "Example account",
-      state: "Authorized",
+      state: "Connected",
       delivery: "Not verified",
       capacity: "Not reported",
       access: wizard.publish,
