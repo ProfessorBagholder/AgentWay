@@ -180,3 +180,40 @@ Agents can read `GET /v1/youtube/channel` (`get_youtube_channel` in MCP), then P
 Updates preserve the other current channel branding fields and require a fresh YouTube readback before returning `status=completed, verified=true`. Identical retries reconcile an already-applied description without another write. A stale expected description or mismatched channel is rejected. This is a read-before-write guard, not an atomic compare-and-swap with YouTube; simultaneous external Studio edits cannot be fully serialized. Translated descriptions and channel names are outside this operation.
 
 Channel-description verification tolerates delayed reads with bounded backoff. If YouTube accepted the write but matching readback is unavailable, HTTP returns 202 (`verification_pending`, `verified=false`), with recovery guidance; MCP returns the same result. Accepted pending inputs are persisted so identical retries verify without resubmitting. Regression tests simulate delayed propagation and persistent mismatch.
+
+## Podcast playlists
+
+Guidance version 7 exposes podcast setup through authenticated HTTP and MCP. Agents offer the option when a user is publishing a podcast, honor any existing preference, and resolve missing show details before changing YouTube. Existing full-episode videos are added by their YouTube IDs; no duplicate upload is needed. Shorts and promotional excerpts stay outside the podcast playlist.
+
+- `list_youtube_playlists` / `GET /v1/youtube/playlists`: channel playlists with `status.podcastStatus`. Pass `page_token` from `nextPageToken` for subsequent pages.
+- Supply `playlist_id` to that read to get its episodes, playlist resource and cover-image resources. Episode pages also accept `page_token`.
+- `manage_youtube_podcast` / `POST /v1/youtube/podcasts`: each request includes a fresh stable `request_id` UUID, the connected `channel_id`, and an `action` from the discovery `podcast_schema`.
+- `get_youtube_podcast_operation` / `GET /v1/youtube/podcast-operations/{request_id}`: saved operation outcome, scoped to the connected account.
+
+Setup sequence:
+
+1. List existing playlists and select the intended show, or `create_playlist` with `title`, `description` and `privacy`. Save the returned `resource.id`.
+2. Reserve a cover using `POST /v1/media` with exact `size` and `mime` (`image/png` or `image/jpeg`), then PUT raw bytes with the same bearer authentication. Covers must be square and at most 2 MiB; 1280×1280 is recommended. Call `set_cover` with `playlist_id` and `media_id`. Existing hero artwork is updated; otherwise artwork is inserted. Staged covers can be removed using the existing media DELETE endpoint after success.
+3. Call `enable_podcast` with `playlist_id`. YouTube requires a playlist image first. This updates only podcast status and preserves playlist privacy, title, description and membership.
+4. Call `add_episode` for each existing full episode using `playlist_id`, YouTube `video_id`, `full_episode: true`, and optional zero-based `position`. Omit position to append. Existing membership is returned without duplication. Existing entries are not reordered. Repeat this step for future uploaded/processed episodes.
+
+Example operation (replace IDs with the actual connected resources):
+
+```json
+{
+  "request_id": "a45de3ef-a2d7-4ab5-8cfa-cdc689ef56d8",
+  "channel_id": "CONNECTED_CHANNEL_ID",
+  "action": "add_episode",
+  "playlist_id": "SHOW_PLAYLIST_ID",
+  "video_id": "EPISODE_VIDEO_ID",
+  "full_episode": true
+}
+```
+
+Existing YouTube management consent is sufficient. Ownership is checked for playlists and episodes. Creating public/unlisted playlists respects the owner’s private-only policy. Images cannot be submitted to the video publishing queue.
+
+Every mutation is durably recorded before the provider request. `completed` means a provider acknowledgement or pre-existing membership; reads expose current remote state. `rejected` includes HTTP status and provider reason. `outcome_unknown` (HTTP 202) can represent a lost response or interrupted process: list remote resources to reconcile before taking further action. Identical retries never resend a mutation, including across restart. Do not create another request UUID to bypass uncertainty. A rejected request can be corrected and submitted with a new UUID. The persisted result is historical and is not automatically changed by later reads. Operation transitions are stored as `podcast.operation` events; the current Activity log UI still projects publication events only.
+
+Podcast designation does not guarantee YouTube Music inclusion or additional recommendations. No RSS ingestion, media rendering, podcast deletion, episode removal/reordering or playlist metadata editing is added by these tools.
+
+References: [YouTube podcast creation](https://support.google.com/youtube/answer/12751636), [playlist status](https://developers.google.com/youtube/v3/docs/playlists), [playlist image uploads](https://developers.google.com/youtube/v3/docs/playlistImages/insert).

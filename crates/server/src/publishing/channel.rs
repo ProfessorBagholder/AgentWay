@@ -12,7 +12,7 @@ pub struct ChannelDescriptionInput {
 }
 
 impl Publisher {
-    async fn connected_channel_id(&self) -> Result<String> {
+    pub(super) async fn connected_channel_id(&self) -> Result<String> {
         sqlx::query_scalar("SELECT channel_id FROM youtube_account WHERE id=1")
             .fetch_optional(&self.0.db)
             .await?

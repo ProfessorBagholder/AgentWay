@@ -4,6 +4,7 @@ mod guidance;
 mod http;
 mod mcp;
 mod oauth;
+mod podcast;
 #[cfg(test)]
 mod tests;
 mod vault;
@@ -47,6 +48,10 @@ struct Endpoints {
     channels: String,
     upload: String,
     videos: String,
+    playlists: String,
+    playlist_items: String,
+    playlist_images: String,
+    playlist_images_upload: String,
 }
 impl Default for Endpoints {
     fn default() -> Self {
@@ -55,6 +60,11 @@ impl Default for Endpoints {
             channels: "https://www.googleapis.com/youtube/v3/channels".into(),
             upload: "https://www.googleapis.com/upload/youtube/v3/videos".into(),
             videos: "https://www.googleapis.com/youtube/v3/videos".into(),
+            playlists: "https://www.googleapis.com/youtube/v3/playlists".into(),
+            playlist_items: "https://www.googleapis.com/youtube/v3/playlistItems".into(),
+            playlist_images: "https://www.googleapis.com/youtube/v3/playlistImages".into(),
+            playlist_images_upload: "https://www.googleapis.com/upload/youtube/v3/playlistImages"
+                .into(),
         }
     }
 }
@@ -134,7 +144,7 @@ fn private() -> String {
 pub struct MediaInput {
     /// Exact byte length; maximum 2 GiB in this version.
     pub size: i64,
-    /// video/mp4, video/quicktime, or video/webm.
+    /// Video: video/mp4, video/quicktime, video/webm (2 GiB). Podcast cover: image/png or image/jpeg (2 MiB).
     pub mime: String,
 }
 #[derive(FromRow)]
@@ -328,9 +338,17 @@ impl Publisher {
     }
     pub async fn create_media(&self, input: MediaInput) -> Result<Value> {
         if !(1..=MAX_MEDIA).contains(&input.size)
-            || !["video/mp4", "video/quicktime", "video/webm"].contains(&input.mime.as_str())
+            || ![
+                "video/mp4",
+                "video/quicktime",
+                "video/webm",
+                "image/png",
+                "image/jpeg",
+            ]
+            .contains(&input.mime.as_str())
+            || (input.mime.starts_with("image/") && input.size > 2 * 1024 * 1024)
         {
-            bail!("Provide 1 byte–2 GiB of MP4, MOV or WebM video");
+            bail!("Provide video up to 2 GiB or a PNG/JPEG podcast cover up to 2 MiB");
         }
         let id = Uuid::new_v4().to_string();
         // Bound disk reservations, including unfinished transfers.
@@ -344,7 +362,7 @@ impl Publisher {
         }
         tx.commit().await?;
         Ok(
-            json!({"media_id": id, "upload_path":format!("/v1/media/{id}"), "method":"PUT", "instructions":"Send raw video bytes to upload_path using the same Authorization bearer token. Do not send a local path or base64. Retry the complete PUT if interrupted. Then call publish_youtube with media_id."}),
+            json!({"media_id": id, "upload_path":format!("/v1/media/{id}"), "method":"PUT", "instructions":"Send raw file bytes to upload_path using the same Authorization bearer token. Do not send a local path or base64. Retry the complete PUT if interrupted. Then call publish_youtube for video, or manage_youtube_podcast action=set_cover for an image, with media_id."}),
         )
     }
     pub async fn enqueue(&self, input: PublishInput) -> Result<Publication> {
@@ -398,6 +416,9 @@ impl Publisher {
             .fetch_optional(&self.0.db)
             .await?
             .ok_or_else(|| anyhow::anyhow!("Upload the complete media file first"))?;
+        if !media.mime.starts_with("video/") {
+            bail!("Publishing requires video media, not a podcast cover");
+        }
         let id = Uuid::new_v4().to_string();
         let agent_name = self.setting("agent_connection_name").await?;
         sqlx::query("INSERT INTO publications(id,request_id,input,channel_id,media_id,title,total_bytes,agent_name) VALUES(?,?,?,?,?,?,?,?)")
