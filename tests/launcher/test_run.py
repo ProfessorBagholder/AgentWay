@@ -27,6 +27,9 @@ fi
 ''')
         self.stub("curl", '''#!/usr/bin/env bash
 printf 'curl %s\\n' "$*" >> "$CALLS"
+if [[ "${REJECT_PYTHON:-0}" == 1 && "$*" == *Python-urllib* ]]; then
+  export RESPONSE_CODE=403 RESPONSE_BODY='error code: 1010'
+fi
 while (($#)); do
   if [[ "$1" == --output ]]; then
     printf '%s' "${RESPONSE_BODY:-AgentWay bearer token required}" > "$2"
@@ -88,6 +91,15 @@ done
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("previous saved agent endpoint was preserved", result.stderr)
                 self.assertNotIn("/api/publishing/bridge", calls)
+
+    def test_browser_filter_block_is_not_reported_as_ready(self):
+        self.configure()
+        self.env["REJECT_PYTHON"] = "1"
+        result, calls = self.run_launcher()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Python-urllib/3.12", calls)
+        self.assertIn("browser/bot filtering", result.stderr)
+        self.assertNotIn("/api/publishing/bridge", calls)
 
     def test_local_and_quick_tunnel_modes_remain_available(self):
         result, calls = self.run_launcher()

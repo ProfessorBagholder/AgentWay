@@ -47,14 +47,20 @@ if "$named_tunnel"; then
   trap 'rm -f "$response_file"' EXIT
   printf 'Checking agent endpoint: %s…\n' "$tunnel_url"
   for attempt in {1..30}; do
-    status=$(curl --silent --max-time 5 --output "$response_file" --write-out '%{http_code}' "$tunnel_url/v1/status") || status=000
-    if [[ "$status" == 401 ]] && grep -q 'AgentWay bearer token required' "$response_file"; then
-      reachable=true
-      break
-    fi
+    reachable=true
+    # Test machine-client headers too: curl alone can pass while an edge
+    # browser check blocks Python clients and hosted agents (Cloudflare 1010).
+    for user_agent in 'AgentWay-connector-check/1.0' 'Python-urllib/3.12' ''; do
+      status=$(curl --silent --max-time 5 --user-agent "$user_agent" --output "$response_file" --write-out '%{http_code}' "$tunnel_url/v1/status") || status=000
+      if [[ "$status" != 401 ]] || ! grep -q 'AgentWay bearer token required' "$response_file"; then
+        reachable=false
+        break
+      fi
+    done
+    "$reachable" && break
     sleep 2
   done
-  "$reachable" || { echo 'The app is running, but the named tunnel is not reachable. Check docker compose logs tunnel; the previous saved agent endpoint was preserved.' >&2; exit 1; }
+  "$reachable" || { echo 'The app is running, but the agent endpoint failed non-browser checks. Check DNS, Cloudflare browser/bot filtering and docker compose logs tunnel; the previous saved agent endpoint was preserved.' >&2; exit 1; }
   curl --fail --silent --show-error --max-time 10 -H 'Content-Type: application/json' --data "{\"url\":\"$tunnel_url\"}" "$url/api/publishing/bridge" >/dev/null
   printf 'Agent endpoint: %s (authenticated; stable address)\n' "$tunnel_url"
 elif "$share"; then

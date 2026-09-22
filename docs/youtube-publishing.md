@@ -121,3 +121,15 @@ Once both files exist, `./run` automatically selects `compose.named-tunnel.yaml`
 The expected public probe is AgentWay's own 401 response without a bearer token. A DNS/TLS/network failure or unrelated proxy response leaves the previously saved endpoint unchanged and exits with an error. Resolve DNS filtering or tunnel configuration before retrying; the launcher does not bypass those controls. The local app can be healthy while the remote endpoint is unavailable.
 
 `./stop` stops the app and tunnel. To return to temporary/local mode, stop the stack and move both tunnel files out of `.agentway` into secure storage before running again. The cloud-side tunnel and DNS record remain until explicitly removed. Keep the machine and Docker running for hosted agents to reach it; restart resilience does not provide availability while the host is asleep.
+
+### Required ingress checks for every agent platform
+
+An agent endpoint is an authenticated machine API. Cloudflare Browser Integrity Check can reject non-browser headers with error 1010 even when ordinary curl succeeds. Before enabling a dedicated agent hostname, create a **Configuration Rule** matching its exact hostname and set **Browser Integrity Check → Off**. For this deployment the expression is `(http.host eq "dev.agentway.win")` and the API setting is `action_parameters: {"bic": false}` in the `http_config_settings` phase. API changes require **Config Settings Write**. Scope this to the agent hostname, not the entire zone.
+
+Keep AgentWay authentication, management isolation and applicable WAF/rate-limit protections. Check other enabled rules for JavaScript/CAPTCHA or browser requirements and resolve any conflict explicitly; this single exception does not guarantee every Cloudflare feature is compatible. An allowlist for a particular agent's current egress IP is not a general compatibility strategy.
+
+The named-tunnel launcher checks an AgentWay client header, Python's client header and an absent User-Agent. All must receive AgentWay's unauthenticated 401 before startup advertises remote readiness or saves the endpoint. Test authenticated status, media methods and the actual configured HTTP/MCP transport separately with each real agent. A successful synthetic probe is a prerequisite, not proof of Muse/Claude/ChatGPT/Grok Bot compatibility.
+
+Incident evidence: Muse reported 1010, and a `Python-urllib/3.12` probe reproduced HTTP 403 with `error code: 1010` while normal curl reached AgentWay. The zone had Browser Integrity Check enabled. The attempted scoped-rule creation was denied by the API's current permissions; documentation and launcher checks do not themselves change that cloud setting.
+
+Sources: [Cloudflare error 1010](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1010/), [Browser Integrity Check](https://developers.cloudflare.com/waf/tools/browser-integrity-check/), [configuration rules](https://developers.cloudflare.com/rules/configuration-rules/settings/#browser-integrity-check).
