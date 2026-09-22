@@ -374,6 +374,7 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
             .any(|t| t["name"] == "publish_youtube")
     );
     for name in [
+        "list_publications",
         "get_youtube_video",
         "set_youtube_visibility",
         "get_video_operation",

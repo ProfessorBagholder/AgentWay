@@ -83,6 +83,7 @@ impl Publisher {
                     .layer(DefaultBodyLimit::disable()),
             )
             .route("/v1/youtube/publish", post(publish))
+            .route("/v1/publications", get(list))
             .route("/v1/publications/{id}", get(publication))
             .route("/v1/publications/{id}/youtube", get(video_status))
             .route("/v1/publications/{id}/visibility", post(set_visibility))

@@ -33,6 +33,17 @@ impl PublishingTools {
         }
     }
     #[tool(
+        description = "List the latest 100 AgentWay publications, including publication IDs and YouTube URLs, to identify originals and corrections without uploading duplicates."
+    )]
+    async fn list_publications(&self) -> Result<rmcp::Json<Value>, String> {
+        self.publisher
+            .list()
+            .await
+            .and_then(|v| Ok(serde_json::to_value(v)?))
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
         description = "Read current YouTube visibility, processing status, failure reasons and duration for a completed AgentWay publication. ready=true requires processing success; it does not assess content quality. Poll no faster than every five seconds."
     )]
     async fn get_youtube_video(

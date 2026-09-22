@@ -150,6 +150,7 @@ HTTP and MCP operations:
 
 | HTTP | MCP | Purpose |
 | --- | --- | --- |
+| GET /v1/publications | list_publications | Latest 100 publication IDs and YouTube URLs for locating original uploads. |
 | GET /v1/publications/{id}/youtube | get_youtube_video | Current privacy, processing/upload status, duration, failure reasons and ready flag. |
 | POST /v1/publications/{id}/visibility | set_youtube_visibility | Set privacy using a stable UUID request_id; optional replacement_id guards retiring an original. MCP additionally takes id. |
 | GET /v1/video-operations/{request_id} | get_video_operation | Read the saved outcome after interruption. |
