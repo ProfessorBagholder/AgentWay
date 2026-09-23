@@ -488,6 +488,7 @@ impl Publisher {
             return Err(error(410, "upload_gone", None));
         }
         let transport_id = upload.transport_id.as_deref().unwrap();
+        let expected_next = offset + bytes.len() as i64;
         let response = self
             .0
             .client
@@ -511,6 +512,9 @@ impl Publisher {
             return Err(error(503, "media_transport_uncertain", None));
         }
         let next = self.transport_offset(&upload).await?;
+        if next != expected_next {
+            return Err(error(503, "media_transport_uncertain", Some(next)));
+        }
         // tusd owns the offset; AgentWay does not maintain a second byte ledger.
         // Sync the shared data before acknowledging at the public boundary.
         tokio::fs::File::open(self.0.tus_dir.join(transport_id))

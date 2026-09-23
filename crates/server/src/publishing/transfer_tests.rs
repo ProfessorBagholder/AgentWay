@@ -70,6 +70,7 @@ async fn fixture() -> (tempfile::TempDir, Publisher) {
         tokio::io::AsyncWriteExt::write_all(&mut file, &bytes)
             .await
             .unwrap();
+        tokio::io::AsyncWriteExt::flush(&mut file).await.unwrap();
         (
             StatusCode::NO_CONTENT,
             [("upload-offset", (offset + bytes.len() as u64).to_string())],
