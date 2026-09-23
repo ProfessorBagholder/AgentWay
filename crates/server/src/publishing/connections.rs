@@ -192,6 +192,7 @@ async fn create(State(p): State<Publisher>, Json(input): Json<Create>) -> Api<Va
         "Muse" => "Muse",
         "Claude" => "Claude",
         "ChatGPT" => "ChatGPT",
+        "Codex" => "Codex",
         _ => return Err(anyhow::anyhow!("Choose an agent platform").into()),
     };
     let _guard = p.0.mutation.lock().await;

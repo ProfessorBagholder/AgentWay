@@ -2076,6 +2076,29 @@ async fn independent_connections_isolate_credentials_media_permissions_and_attri
 }
 
 #[tokio::test]
+async fn codex_connection_is_independent_and_starts_without_publishing_access() {
+    let (_dir, p) = fixture().await;
+    let muse_token = p.secret("agent_token").await.unwrap();
+    let (status, created) = admin(
+        &p,
+        "POST",
+        "/api/agent-connections",
+        json!({"product":"Codex","publish_enabled":false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(created["name"], "Codex");
+    assert_eq!(created["product"], "Codex");
+    assert_eq!(created["publish_enabled"], false);
+    let codex = p.for_connection(created["id"].as_str().unwrap());
+    let codex_token = codex.secret("agent_token").await.unwrap();
+    assert_ne!(codex_token, muse_token);
+    let (_, discovery) = call(&codex, "GET", "/v1/status", vec![], true).await;
+    assert_eq!(discovery["connection"]["name"], "Codex");
+    assert_eq!(discovery["connection"]["publish_enabled"], false);
+}
+
+#[tokio::test]
 async fn mcp_uses_the_credential_on_each_call_and_rejects_revocation() {
     let (_dir, p) = fixture().await;
     let (_, created) = admin(

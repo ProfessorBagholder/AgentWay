@@ -4,7 +4,7 @@
 
 - Work in `~/dev/AgentWay`. Do not use `~/Documents` for this project.
 - AgentWay connects users' existing agents to services and to one another. It does not host models or create content itself.
-- Treat Muse, Grok Bot, ChatGPT agents and Claude agents as distinct products. Verify their actual connector capabilities; do not substitute coding products or model APIs.
+- Treat Muse, Grok Bot, ChatGPT agents, Claude agents and Codex as distinct products. Verify their actual connector capabilities; do not substitute one product or a model API for another. Codex is an explicit connection here, not evidence that ChatGPT agents can use the same setup.
 - Infer the narrowest coherent change from the request and existing behavior. Preserve unrelated screens, navigation, styling and behavior. Propose optional improvements separately.
 - Implement on a focused branch. Deliver a reviewable PR; do not merge without authorization.
 - Before editing UI, inspect the existing screen and code. Review the final diff against the original request and compare rendered screens, not just build/test results.
@@ -24,7 +24,7 @@
 - Preserve the original AgentWay dark palette (slate surfaces and pale green accent). Offer light/dark selection with a persisted preference; do not replace the established theme during unrelated design work.
 - Appearance controls belong in Settings → Appearance. Use labelled Light/Dark choices with sun/moon icons, consistent with existing controls; do not add an arbitrary sidebar toggle.
 - Platforms uses Platform, Account, Status and Agents columns; show actual agent names. Platform detail leads with the platform name. Omit format subtitles and speculative publishing-default controls; video settings are supplied through the agent publishing flow.
-- Agents list: show only the short platform label (Muse, Claude, ChatGPT, Grok) in Agent and the status badge in Connection. No secondary text or usage-limit column in this list. Preserve exact product identities internally.
+- Agents list: show only the short product label (Muse, Claude, ChatGPT, Grok, Codex) in Agent and the status badge in Connection. No secondary text or usage-limit column in this list. Preserve exact product identities internally.
 - Agent detail headings must match the clicked agent label (e.g. Muse), not an invented role. Omit generic account labels, internal transport descriptions and hard-coded activity summaries. Activity must come from the correlated Activity log.
 - Healthy agent details show one Connected badge, editable platform permissions and a secondary Disconnect action. Do not add Pause/Reconnect controls or duplicate authorization rows. Recovery actions appear only for an actual diagnosed connection failure.
 

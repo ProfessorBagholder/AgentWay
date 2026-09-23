@@ -389,6 +389,7 @@ function ConnectAgent() {
               <option>Muse</option>
               <option>Claude</option>
               <option>ChatGPT</option>
+              <option>Codex</option>
             </select>
           </div>
         </div>

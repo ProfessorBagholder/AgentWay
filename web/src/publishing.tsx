@@ -122,8 +122,12 @@ export function ConnectionInstructions({
     onSuccess: (r) => setToken(r.token),
   });
   const base = status.bridge_url || "http://127.0.0.1:8788";
-  const instructions = `Connect ${connection.product} to AgentWay using its MCP server: ${base}/mcp
-Transport: Streamable HTTP. Authenticate every request with Authorization: Bearer <token>. Store the token in your connector's secret field, not in chat, source code or instructions. Use the credential for this ${connection.name} connection.
+  const setup =
+    connection.product === "Codex"
+      ? `Configure Codex's Streamable HTTP MCP server at ${base}/mcp. Set bearer_token_env_var = "AGENTWAY_CODEX_TOKEN" in the agentway entry of your Codex MCP configuration, and supply this connection's token in the environment that starts Codex. Start a new Codex task after configuring it. Keep the token out of chat, source code and instructions.`
+      : `Connect ${connection.product} to AgentWay using its MCP server: ${base}/mcp
+Transport: Streamable HTTP. Authenticate every request with Authorization: Bearer <token>. Store the token in your connector's secret field, not in chat, source code or instructions. Use the credential for this ${connection.name} connection.`;
+  const instructions = `${setup}
 
 First discover the tools and call youtube_status. Confirm the returned connection.id is ${connection.id}, and report the connected channel and your permissions. Do not publish anything during this connection check.
 
@@ -179,7 +183,9 @@ Media transfer uses create_media_upload, followed by raw HTTP PUT to its returne
             Agent token
             <input readOnly value={token} onFocus={(e) => e.target.select()} />
             <span className="muted">
-              Enter this in your agent’s secure credential field.
+              {connection.product === "Codex"
+                ? "Use this as the Codex MCP bearer token. Keep it out of project files and chat."
+                : "Enter this in your agent’s secure credential field."}
             </span>
           </label>
         )}
