@@ -421,7 +421,6 @@ async fn publish(AgentState(p): AgentState, Json(input): Json<PublishInput>) -> 
 async fn remove_media(AgentState(p): AgentState, Path(id): Path<String>) -> Api<Value> {
     p.check_publish_access().await?;
     let _media = p.media_lock(&id).await?;
-    let _guard = p.0.mutation.lock().await;
     p.remove_media_locked(&id, "cancelled").await?;
     Ok(Json(json!({"removed":true})))
 }

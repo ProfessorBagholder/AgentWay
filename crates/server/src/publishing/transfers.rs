@@ -590,7 +590,6 @@ impl Publisher {
     async fn cancel_media_upload_inner(&self, id: &str) -> Result<Value> {
         self.check_publish_access().await?;
         let _guard = self.media_lock(id).await?;
-        let _mutation = self.0.mutation.lock().await;
         let upload = self.upload_record(id).await?;
         if ["cancelled", "expired"].contains(&upload.status.as_str()) {
             return Ok(upload.value());
@@ -599,6 +598,7 @@ impl Publisher {
         Ok(self.upload_record(id).await?.value())
     }
     pub(super) async fn remove_media_locked(&self, id: &str, status: &str) -> Result<()> {
+        let mutation = self.0.mutation.lock().await;
         self.check_media_owner(id).await?;
         let used:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM publications WHERE media_id=?) OR EXISTS(SELECT 1 FROM youtube_asset_operations WHERE json_extract(input,'$.media_id')=? AND json_extract(result,'$.status') IN ('upload_pending','outcome_unknown')) OR EXISTS(SELECT 1 FROM podcast_operations WHERE json_extract(input,'$.media_id')=? AND json_extract(result,'$.status') IN ('upload_pending','outcome_unknown'))")
             .bind(id).bind(id).bind(id).fetch_one(&self.0.db).await?;
@@ -633,6 +633,9 @@ impl Publisher {
         )
         .await?;
         tx.commit().await?;
+        // Readiness is durably invalidated. Retain only the media-specific lock
+        // while waiting for storage; unrelated permission changes must remain available.
+        drop(mutation);
         let attempts: Vec<String> =
             sqlx::query_scalar("SELECT id FROM media_transfer_attempts WHERE media_id=?")
                 .bind(id)
@@ -672,7 +675,6 @@ impl Publisher {
         let ids:Vec<String>=sqlx::query_scalar("SELECT media_id FROM media_uploads WHERE (status IN ('receiving','checksum_mismatch') AND expires_at<=unixepoch()) OR status IN ('cancelling','expiring') LIMIT 100").fetch_all(&self.0.db).await?;
         for id in ids {
             let _guard = self.media_lock(&id).await?;
-            let _mutation = self.0.mutation.lock().await;
             let root = Self(self.0.clone(), None);
             let upload = root.upload_record(&id).await?;
             if (["receiving", "checksum_mismatch"].contains(&upload.status.as_str())

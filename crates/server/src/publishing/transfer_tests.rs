@@ -540,3 +540,39 @@ async fn resumable_recovers_creation_response_loss_and_reports_unavailable_trans
         .unwrap();
     assert!(events > 0);
 }
+
+#[tokio::test]
+async fn resumable_slow_deletion_does_not_block_unrelated_permission_changes() {
+    let (_dir, mut p) = fixture().await;
+    let u = p
+        .create_resumable_upload(reservation(b"abcd"))
+        .await
+        .unwrap();
+    let id = u["media_id"].as_str().unwrap().to_owned();
+    let started = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let state = (started.clone(), release.clone());
+    async fn delayed(State((started, release)): State<(Arc<Notify>, Arc<Notify>)>) -> StatusCode {
+        started.notify_one();
+        release.notified().await;
+        StatusCode::NO_CONTENT
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    Arc::get_mut(&mut p.0).unwrap().tus_url =
+        Some(format!("http://{}", listener.local_addr().unwrap()));
+    tokio::spawn(async move {
+        axum::serve(listener, Router::new().fallback(delayed).with_state(state))
+            .await
+            .unwrap();
+    });
+    let clone = p.clone();
+    let task = tokio::spawn(async move { clone.cancel_media_upload(&id).await });
+    started.notified().await;
+    let guard = tokio::time::timeout(Duration::from_secs(1), p.0.mutation.lock())
+        .await
+        .expect("storage deletion held the global lock");
+    p.set("publish_enabled", "false").await.unwrap();
+    drop(guard);
+    release.notify_one();
+    assert_eq!(task.await.unwrap().unwrap()["status"], "cancelled");
+}
