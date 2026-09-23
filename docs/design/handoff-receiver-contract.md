@@ -1,6 +1,6 @@
 # AgentWay receiver contract
 
-Status: proposed common protocol, 2026-09-23. This document specifies what **every** agent must do to participate in handoffs. It is not implemented. The [architecture](handoff-delivery-architecture.md) owns the system design; the [compatibility matrix](handoff-receiver-compatibility.md) records whether each product can host a compliant receiver.
+Status: AgentWay-facing protocol v1 frozen for feasibility testing, 2026-09-23. **It is not implemented and no native receiver has passed.** This document specifies what **every** agent must do to participate in handoffs. The [architecture](handoff-delivery-architecture.md) owns the system design; the [compatibility matrix](handoff-receiver-compatibility.md) records whether each product can host a compliant receiver. The [conformance runbook](handoff-conformance-v1.md) is the same test for every product.
 
 ## Product boundary
 
@@ -15,7 +15,7 @@ This split prevents a healthy background socket from being misreported as an age
 
 ## Wire contract
 
-Use versioned, platform-neutral HTTP/MCP operations; the wire format below is illustrative and must be finalized before migration. The transport adapter makes an outbound authenticated subscription or bounded long poll to AgentWay, so the user's machine does not need an inbound port. AgentWay stores the envelope until an authenticated acknowledgment or deadline. SSE/WebSocket is a latency optimization; the database outbox remains the source of truth.
+Use versioned, platform-neutral HTTP/MCP operations. The transport adapter makes an outbound authenticated subscription or bounded long poll to AgentWay, so the user's machine does not need an inbound port. AgentWay stores the envelope until an authenticated acknowledgment or deadline. SSE/WebSocket is a latency optimization; the database outbox remains the source of truth. Native wake is a separate adapter obligation: a successful subscription does not demonstrate that the existing agent can be started.
 
 ```json
 {
@@ -24,11 +24,18 @@ Use versioned, platform-neutral HTTP/MCP operations; the wire format below is il
   "kind": "task_offered | result_available | cancel_requested",
   "task_id": "uuid",
   "binding_generation": 3,
+  "correlation_id": "uuid",
   "expires_at": "RFC3339 timestamp"
 }
 ```
 
-The envelope contains no task instructions, media URL or credential. The native agent fetches content through AgentWay after claiming. Each operation has an idempotency key or stable ID. A stale binding generation, wrong connection, revoked directed grant, expired offer or duplicate claim is rejected with a typed code, not a generic 500. Every API response includes the authoritative task/delivery state and correlation ID; a retry can read that state before repeating an action.
+The envelope contains no task instructions, media URL or credential. The native agent fetches content through AgentWay after claiming. The adapter may acknowledge **transport admission** with the delivery ID, binding generation and an opaque native run reference; only the native agent may acknowledge **task acceptance** using its existing connection credential and claim token. The same distinction applies to return delivery. Each operation has an idempotency key or stable ID. A stale binding generation, wrong connection, revoked directed grant, expired offer or duplicate claim is rejected with a typed code, not a generic 500. Every API response includes the authoritative task/delivery state and correlation ID; a retry can read that state before repeating an action.
+
+The binding is an owner-approved association of connection ID, native product, exact target reference, receiver credential hash, generation, proof timestamp and expiry. The target reference and receiver secret are never returned through agent discovery or journal payloads. Changing target or credential increments the generation and invalidates outstanding transport admissions. A binding is only **verified** after an idle task reaches the intended native agent and a result returns to the original sender; heartbeat and provider HTTP acceptance cannot set that flag. A disconnected connection, expired proof or revoked grant becomes unavailable for new automatic handoffs. Existing pull-inbox tasks remain accessible under their original API and are not retroactively marked delivered.
+
+For new automatic handoffs, the server checks both parties' verified, current receiver bindings and the directed grant before accepting the task. It commits task, audit event and outbound delivery in one transaction, or commits none. If either side cannot receive, it returns a typed unavailable error rather than silently falling back to pull. Terminal task state and a result-delivery outbox item commit together. Delivery attempts are separate, append-only records; retries reuse the delivery ID and reconcile the native run reference before invoking a second side effect. The sender's native agent acknowledges reading the result; only then is `result_delivered` true.
+
+Protocol v1 error codes are `receiver_unavailable`, `binding_stale`, `grant_revoked`, `delivery_expired`, `delivery_duplicate`, `claim_conflict`, `claim_expired`, `input_required`, `native_outcome_unknown` and `return_undeliverable`. An error includes a safe correlation ID and recovery action, never a bearer token, native target identifier or task instructions. HTTP status codes distinguish invalid input (400), unauthenticated (401), unauthorized (403), absent (404), state conflict (409), expired (410), accepted but unconfirmed native work (202), and server failure (5xx). Retrying an identical request ID must return the authoritative existing state rather than duplicate work.
 
 | Common operation | Required evidence |
 | --- | --- |
