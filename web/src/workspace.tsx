@@ -590,7 +590,9 @@ function TransferTaskRow({ t }: { t: MediaTransfer }) {
         {t.status === "checksum_mismatch" && (
           <p className="error">File checksum did not match</p>
         )}
-        {t.status === "interrupted" && <p className="error">{t.last_error}</p>}
+        {t.status === "interrupted" && (
+          <p className="error">{t.last_error || "Transfer interrupted"}</p>
+        )}
       </td>
       <TransferMetadata t={t} />
     </tr>
@@ -632,8 +634,8 @@ function TransferDetail({ id }: { id: string }) {
           )}
           {row.status === "interrupted" && (
             <p className="error" role="alert">
-              {row.last_error}. The agent can check the saved offset and resume
-              the same transfer.
+              {row.last_error || "Transfer interrupted"}. The agent can check
+              the saved offset and resume the same transfer.
             </p>
           )}
           <div className="actions">
@@ -737,7 +739,8 @@ function transferTitle(t: MediaTransfer) {
     : t.mime.startsWith("image/")
       ? "Image"
       : "File";
-  if (t.size === 0) return `${kind} transfer · 0 bytes`;
+  if (t.size < 1024)
+    return `${kind} transfer · ${t.size.toLocaleString()} bytes`;
   const unit = t.size >= 1024 * 1024 ? "MiB" : "KiB";
   const divisor = unit === "MiB" ? 1024 * 1024 : 1024;
   const amount = new Intl.NumberFormat(undefined, {
