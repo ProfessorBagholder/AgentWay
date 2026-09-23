@@ -1,6 +1,6 @@
 # AgentWay receiver contract
 
-Status: AgentWay-facing protocol v1 frozen for feasibility testing, 2026-09-23. **It is not implemented and no native receiver has passed.** This document specifies what **every** agent must do to participate in handoffs. The [architecture](handoff-delivery-architecture.md) owns the system design; the [compatibility matrix](handoff-receiver-compatibility.md) records whether each product can host a compliant receiver. The [conformance runbook](handoff-conformance-v1.md) is the same test for every product.
+Status: common requirements for feasibility testing, 2026-09-23. **Wire routes and schemas are not yet frozen, this is not implemented, and no native receiver has passed.** This document specifies what **every** agent must do to participate in handoffs. The [architecture](handoff-delivery-architecture.md) owns the system design; the [compatibility matrix](handoff-receiver-compatibility.md) records whether each product can host a compliant receiver. The [conformance runbook](handoff-conformance-v1.md) is the same test for every product.
 
 ## Product boundary
 
