@@ -588,6 +588,21 @@ function HandoffPermissions({ connection }: { connection: BridgeConnection }) {
         recipient_id,
         enabled,
       }),
+    onMutate: ({ recipient_id, enabled }) => {
+      const key = ["agent-handoff-grants", connection.id];
+      const previous = cache.getQueryData<string[]>(key) ?? [];
+      cache.setQueryData<string[]>(
+        key,
+        enabled
+          ? [...new Set([...previous, recipient_id])]
+          : previous.filter((id) => id !== recipient_id),
+      );
+      return previous;
+    },
+    onError: (_error, _variables, previous) => {
+      if (previous)
+        cache.setQueryData(["agent-handoff-grants", connection.id], previous);
+    },
     onSuccess: (ids) =>
       cache.setQueryData(["agent-handoff-grants", connection.id], ids),
   });
