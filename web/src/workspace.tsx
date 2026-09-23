@@ -52,6 +52,10 @@ interface HandoffPage {
   items: AgentHandoff[];
   next: number | null;
 }
+interface HandoffGrant {
+  sender_id: string;
+  recipient_id: string;
+}
 function useHandoffs() {
   const loaded = useInfiniteQuery<HandoffPage, Error>({
     queryKey: ["agent-handoffs"],
@@ -146,6 +150,7 @@ function Agents() {
           Connect agent
         </a>
       </Heading>
+      <AgentsTabs active="connections" />
       {c.isPending ? (
         <Loading />
       ) : c.error ? (
@@ -177,6 +182,26 @@ function Agents() {
         </section>
       )}
     </>
+  );
+}
+function AgentsTabs({ active }: { active: "connections" | "access" }) {
+  return (
+    <div className="toolbar" aria-label="Agents sections">
+      <a
+        className={active === "connections" ? "selected" : ""}
+        aria-current={active === "connections" ? "page" : undefined}
+        href="#/agents"
+      >
+        Connections
+      </a>
+      <a
+        className={active === "access" ? "selected" : ""}
+        aria-current={active === "access" ? "page" : undefined}
+        href="#/agents/access"
+      >
+        Task access
+      </a>
+    </div>
   );
 }
 function AgentDetail({ id }: { id: string }) {
@@ -265,7 +290,6 @@ function AgentControls({
           </div>
         </section>
       )}
-      {c.state !== "Disconnected" && <HandoffPermissions connection={c} />}
       {c.state !== "Disconnected" && (
         <ConnectionInstructions
           key={c.id + c.state}
@@ -569,77 +593,202 @@ function Youtube() {
     </>
   );
 }
-function HandoffPermissions({ connection }: { connection: BridgeConnection }) {
+function AgentTaskAccess() {
   const connections = useConnections();
-  const [optimistic, setOptimistic] = useState<string[] | null>(null);
-  const grants = useQuery<string[]>({
-    queryKey: ["agent-handoff-grants", connection.id],
-    queryFn: () =>
-      request<string[]>(`/api/agent-handoff-grants/${connection.id}`),
+  const grants = useQuery<HandoffGrant[]>({
+    queryKey: ["agent-handoff-grants"],
+    queryFn: () => request<HandoffGrant[]>("/api/agent-handoff-grants"),
   });
+  const [sender, setSender] = useState("");
+  const [recipient, setRecipient] = useState("");
+  const [search, setSearch] = useState("");
   const change = useMutation({
     mutationFn: ({
+      sender_id,
       recipient_id,
       enabled,
-    }: {
-      recipient_id: string;
-      enabled: boolean;
-    }) =>
-      request<string[]>(`/api/agent-handoff-grants/${connection.id}`, {
+    }: HandoffGrant & { enabled: boolean }) =>
+      request<string[]>(`/api/agent-handoff-grants/${sender_id}`, {
         recipient_id,
         enabled,
       }),
-    onError: () => {
-      setOptimistic(null);
-    },
-    onSuccess: (ids) => {
-      cache.setQueryData(["agent-handoff-grants", connection.id], ids);
-      setOptimistic(null);
+    onSuccess: (_ids, changed) => {
+      cache.setQueryData<HandoffGrant[]>(
+        ["agent-handoff-grants"],
+        (old = []) =>
+          changed.enabled
+            ? [
+                ...old,
+                {
+                  sender_id: changed.sender_id,
+                  recipient_id: changed.recipient_id,
+                },
+              ]
+            : old.filter(
+                (grant) =>
+                  grant.sender_id !== changed.sender_id ||
+                  grant.recipient_id !== changed.recipient_id,
+              ),
+      );
+      if (changed.enabled) setRecipient("");
     },
   });
-  const peers = connections.data.filter(
-    (c) => c.id !== connection.id && c.state === "Connected",
+  const connected = connections.data.filter((c) => c.state === "Connected");
+  const names = new Map(connections.data.map((c) => [c.id, c.name]));
+  const label = (id: string) => {
+    const name = names.get(id) ?? "Disconnected agent";
+    return connections.data.filter((c) => c.name === name).length > 1
+      ? `${name} · ${id.slice(0, 8)}`
+      : name;
+  };
+  const eligible = connected.filter(
+    (c) =>
+      c.id !== sender &&
+      !grants.data?.some(
+        (grant) => grant.sender_id === sender && grant.recipient_id === c.id,
+      ),
   );
-  if (!peers.length) return null;
+  const visible = (grants.data ?? [])
+    .filter((grant) =>
+      `${label(grant.sender_id)} ${label(grant.recipient_id)}`
+        .toLocaleLowerCase()
+        .includes(search.trim().toLocaleLowerCase()),
+    )
+    .sort((a, b) =>
+      `${label(a.sender_id)} ${label(a.recipient_id)}`.localeCompare(
+        `${label(b.sender_id)} ${label(b.recipient_id)}`,
+      ),
+    );
   return (
-    <section className="panel">
-      <div className="panel-title">
-        <h2>Agent access</h2>
-      </div>
-      <div className="pad">
-        {grants.isPending ? (
-          <Loading />
-        ) : grants.error ? (
-          <ErrorMessage error={grants.error} />
-        ) : (
-          peers.map((peer) => (
-            <label className="check" key={peer.id}>
-              <input
-                type="checkbox"
-                checked={(optimistic ?? grants.data).includes(peer.id)}
-                disabled={change.isPending}
-                onChange={(e) => {
-                  const current = optimistic ?? grants.data;
-                  setOptimistic(
-                    e.target.checked
-                      ? [...new Set([...current, peer.id])]
-                      : current.filter((id) => id !== peer.id),
-                  );
-                  change.mutate({
-                    recipient_id: peer.id,
-                    enabled: e.target.checked,
-                  });
+    <>
+      <Heading title="Agents">
+        <a className="button primary" href="#/agents/connect">
+          Connect agent
+        </a>
+      </Heading>
+      <AgentsTabs active="access" />
+      {connections.isPending || grants.isPending ? (
+        <Loading />
+      ) : connections.error || grants.error ? (
+        <ErrorMessage error={connections.error || grants.error} />
+      ) : connected.length < 2 ? (
+        <p>
+          <a href="#/agents/connect">Connect another agent</a> to set task
+          access.
+        </p>
+      ) : (
+        <>
+          <form
+            className="access-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (sender && recipient && sender !== recipient)
+                change.mutate({
+                  sender_id: sender,
+                  recipient_id: recipient,
+                  enabled: true,
+                });
+            }}
+          >
+            <label>
+              Assigning agent
+              <select
+                value={sender}
+                onChange={(event) => {
+                  setSender(event.target.value);
+                  setRecipient("");
                 }}
-              />
-              Assign tasks to {peer.name}
-              {peers.filter((candidate) => candidate.name === peer.name)
-                .length > 1 && ` · ${peer.id.slice(0, 8)}`}
+              >
+                <option value="">Select agent</option>
+                {connected.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {label(c.id)}
+                  </option>
+                ))}
+              </select>
             </label>
-          ))
-        )}
-        <ErrorMessage error={change.error} />
-      </div>
-    </section>
+            <label>
+              Receiving agent
+              <select
+                value={recipient}
+                disabled={!sender}
+                onChange={(event) => setRecipient(event.target.value)}
+              >
+                <option value="">Select agent</option>
+                {eligible.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {label(c.id)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="primary"
+              disabled={!sender || !recipient || change.isPending}
+            >
+              Allow task assignment
+            </button>
+          </form>
+          <ErrorMessage error={change.error} />
+          {!!grants.data.length && (
+            <>
+              {grants.data.length > 8 && (
+                <label className="access-search">
+                  Search task access
+                  <input
+                    type="search"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                  />
+                </label>
+              )}
+              {visible.length ? (
+                <section className="panel">
+                  <table className="agent-table access-table">
+                    <thead>
+                      <tr>
+                        <th>Assigning agent</th>
+                        <th>Receiving agent</th>
+                        <th>Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visible.map((grant) => (
+                        <tr key={`${grant.sender_id}:${grant.recipient_id}`}>
+                          <td data-label="Assigning agent">
+                            <a href={`#/agents/${grant.sender_id}`}>
+                              {label(grant.sender_id)}
+                            </a>
+                          </td>
+                          <td data-label="Receiving agent">
+                            <a href={`#/agents/${grant.recipient_id}`}>
+                              {label(grant.recipient_id)}
+                            </a>
+                          </td>
+                          <td data-label="Action">
+                            <button
+                              disabled={change.isPending}
+                              aria-label={`Remove task access from ${label(grant.sender_id)} to ${label(grant.recipient_id)}`}
+                              onClick={() =>
+                                change.mutate({ ...grant, enabled: false })
+                              }
+                            >
+                              Remove
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              ) : (
+                <p>No matches</p>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </>
   );
 }
 function Tasks({ filter }: { filter: string }) {
@@ -1818,6 +1967,7 @@ export function Workspace({ route }: { route: string }) {
   const [path, search] = route.split("?");
   const query = new URLSearchParams(search);
   if (path === "agents") return <Agents />;
+  if (path === "agents/access") return <AgentTaskAccess />;
   if (path === "agents/connect") return <ConnectAgent />;
   if (path.startsWith("agents/"))
     return <AgentDetail key={path} id={path.split("/")[1]} />;

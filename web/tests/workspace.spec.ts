@@ -160,7 +160,7 @@ test("agent handoff appears in Tasks and its result updates in place", async ({
   await page.getByRole("button", { name: /Review episode/ }).click();
   await expect(page.getByText("Looks good")).toBeVisible();
 });
-test("owner can grant a connected agent permission to assign another agent", async ({
+test("task access shows and edits multiple directed agent permissions", async ({
   page,
 }) => {
   await page.route("**/api/agent-connections", (r) =>
@@ -184,27 +184,73 @@ test("owner can grant a connected agent permission to assign another agent", asy
           publish_enabled: true,
           activity: null,
         },
+        {
+          id: "claude",
+          name: "Claude",
+          product: "Claude",
+          revision: 1,
+          state: "Connected",
+          publish_enabled: false,
+          activity: null,
+        },
       ],
     }),
   );
-  let grants: string[] = [];
-  await page.route("**/api/agent-handoff-grants/muse", (route) => {
+  const grants: { sender_id: string; recipient_id: string }[] = [];
+  await page.route("**/api/agent-handoff-grants", (route) =>
+    route.fulfill({ json: grants }),
+  );
+  await page.route("**/api/agent-handoff-grants/*", (route) => {
     if (route.request().method() === "POST") {
+      const sender_id = route.request().url().split("/").pop()!;
       const body = route.request().postDataJSON() as {
         recipient_id: string;
         enabled: boolean;
       };
-      grants = body.enabled ? [body.recipient_id] : [];
+      if (body.enabled)
+        grants.push({ sender_id, recipient_id: body.recipient_id });
+      else {
+        const index = grants.findIndex(
+          (grant) =>
+            grant.sender_id === sender_id &&
+            grant.recipient_id === body.recipient_id,
+        );
+        if (index >= 0) grants.splice(index, 1);
+      }
     }
-    return route.fulfill({ json: grants });
+    return route.fulfill({ json: grants.map((g) => g.recipient_id) });
   });
-  await page.goto("/#/agents/muse");
-  const checkbox = page.getByRole("checkbox", { name: "Assign tasks to Grok" });
-  await expect(checkbox).toBeVisible();
-  await checkbox.check();
-  await expect(checkbox).toBeChecked();
-  await checkbox.uncheck();
-  await expect(checkbox).not.toBeChecked();
+  await page.goto("/#/agents");
+  await page.getByRole("link", { name: "Task access" }).click();
+  await page
+    .getByRole("combobox", { name: "Assigning agent" })
+    .selectOption("grok");
+  await page
+    .getByRole("combobox", { name: "Receiving agent" })
+    .selectOption("muse");
+  await page.getByRole("button", { name: "Allow task assignment" }).click();
+  await expect(
+    page.getByRole("row", { name: /Grok Muse Remove/ }),
+  ).toBeVisible();
+  await page
+    .getByRole("combobox", { name: "Assigning agent" })
+    .selectOption("claude");
+  await page
+    .getByRole("combobox", { name: "Receiving agent" })
+    .selectOption("muse");
+  await page.getByRole("button", { name: "Allow task assignment" }).click();
+  await expect(
+    page.getByRole("row", { name: /Claude Muse Remove/ }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Remove task access from Grok to Muse" })
+    .click();
+  await expect(page.getByRole("row", { name: /Grok Muse Remove/ })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByRole("row", { name: /Claude Muse Remove/ }),
+  ).toBeVisible();
 });
 test("real task rows update without navigation or unrelated fetching", async ({
   page,

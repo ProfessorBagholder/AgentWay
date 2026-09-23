@@ -127,6 +127,7 @@ struct GrantInput {
 
 pub(super) fn admin_routes() -> Router<Publisher> {
     Router::new()
+        .route("/api/agent-handoff-grants", get(all_grants))
         .route(
             "/api/agent-handoff-grants/{sender_id}",
             get(grants).post(set_grant),
@@ -436,6 +437,19 @@ async fn owner_history(
 ) -> Api<Value> {
     Ok(Json(p.handoff_history(&id, q.after.unwrap_or(0)).await?))
 }
+#[derive(Serialize, FromRow)]
+struct HandoffGrant {
+    sender_id: String,
+    recipient_id: String,
+}
+async fn all_grants(State(p): State<Publisher>) -> Api<Vec<HandoffGrant>> {
+    let rows = sqlx::query_as(
+        "SELECT sender_id, recipient_id FROM agent_handoff_grants ORDER BY sender_id, recipient_id",
+    )
+    .fetch_all(&p.0.db)
+    .await?;
+    Ok(Json(rows))
+}
 async fn grants(State(p): State<Publisher>, Path(sender_id): Path<String>) -> Api<Value> {
     let ids: Vec<String> = sqlx::query_scalar(
         "SELECT recipient_id FROM agent_handoff_grants WHERE sender_id=? ORDER BY recipient_id",
@@ -528,6 +542,10 @@ mod tests {
         .execute(&p.0.db)
         .await
         .unwrap();
+        let listed = all_grants(State(p.clone())).await.unwrap().0;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].sender_id, "sender");
+        assert_eq!(listed[0].recipient_id, "receiver");
         assert_eq!(sender.discover_agents().await.unwrap()[0]["id"], "receiver");
         let created = sender.create_handoff(input()).await.unwrap();
         assert_eq!(sender.create_handoff(input()).await.unwrap(), created);
@@ -599,6 +617,7 @@ mod tests {
         );
         receiver.disconnect_connection().await.unwrap();
         assert_eq!(sender.discover_agents().await.unwrap(), json!([]));
+        assert!(all_grants(State(p)).await.unwrap().0.is_empty());
     }
     #[tokio::test]
     async fn completion_is_durable_and_stale_claim_is_fenced() {
