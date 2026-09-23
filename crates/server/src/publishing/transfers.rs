@@ -211,8 +211,13 @@ impl Publisher {
         if inserted.rows_affected() == 0 {
             return Err(error(507, "media_storage_quota_exceeded", None));
         }
-        sqlx::query("INSERT INTO media_uploads(media_id,agent_id,request_id,size,mime,sha256) VALUES(?,?,?,?,?,?)")
-            .bind(&id).bind(self.connection_id()).bind(input.request_id).bind(input.size).bind(input.mime).bind(input.sha256).execute(&mut *tx).await?;
+        let agent_name: Option<String> =
+            sqlx::query_scalar("SELECT name FROM agent_connections WHERE id=?")
+                .bind(self.connection_id())
+                .fetch_optional(&mut *tx)
+                .await?;
+        sqlx::query("INSERT INTO media_uploads(media_id,agent_id,request_id,size,mime,sha256,agent_name,created_at) VALUES(?,?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now'))")
+            .bind(&id).bind(self.connection_id()).bind(input.request_id).bind(input.size).bind(input.mime).bind(input.sha256).bind(agent_name).execute(&mut *tx).await?;
         transfer_event(&mut tx, &id, self.connection_id(), "reserved").await?;
         tx.commit().await?;
         drop(guard);
@@ -379,8 +384,25 @@ impl Publisher {
         // Client cancellation must not release serialization while a filesystem
         // write or SQLite commit is still in flight. The bounded task owns both.
         tokio::spawn(async move {
-            p.receive_chunk_inner(&id, offset, checksum.as_deref(), length, body)
-                .await
+            let result = p
+                .receive_chunk_inner(&id, offset, checksum.as_deref(), length, body)
+                .await;
+            if let Err(err) = &result {
+                let code = match err.downcast_ref::<TransferError>() {
+                    Some(failure)
+                        if failure.status >= 500
+                            || ["chunk_timeout", "chunk_interrupted"].contains(&failure.code) =>
+                    {
+                        Some(failure.code)
+                    }
+                    Some(_) | None => None,
+                };
+                if let Some(code) = code {
+                    // A disconnected client still leaves a diagnostic event.
+                    let _ = p.record_transfer_failure(&id, offset, code).await;
+                }
+            }
+            result
         })
         .await?
     }
@@ -496,11 +518,29 @@ impl Publisher {
             .sync_all()
             .await?;
         self.sync_transfer_directory().await?;
-        sqlx::query("UPDATE media_uploads SET expires_at=unixepoch()+604800 WHERE media_id=?")
-            .bind(id)
-            .execute(&self.0.db)
-            .await?;
+        let mut tx = self.0.db.begin().await?;
+        sqlx::query("UPDATE media_uploads SET expires_at=unixepoch()+604800,observed_offset=?,status='receiving',last_error=NULL WHERE media_id=?")
+            .bind(next).bind(id).execute(&mut *tx).await?;
+        transfer_event(&mut tx, id, &upload.agent_id, "receiving").await?;
+        tx.commit().await?;
         Ok(next)
+    }
+    async fn record_transfer_failure(
+        &self,
+        id: &str,
+        expected_offset: i64,
+        code: &'static str,
+    ) -> Result<()> {
+        let _guard = self.media_lock(id).await?;
+        let upload = self.upload_record(id).await?;
+        let mut tx = self.0.db.begin().await?;
+        let changed = sqlx::query("UPDATE media_uploads SET status='interrupted',last_error=? WHERE media_id=? AND observed_offset=? AND status IN ('receiving','interrupted')")
+            .bind(code).bind(id).bind(expected_offset).execute(&mut *tx).await?;
+        if changed.rows_affected() > 0 {
+            transfer_event(&mut tx, id, &upload.agent_id, "interrupted").await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
     async fn sync_transfer_directory(&self) -> Result<()> {
         let path = self.0.tus_dir.clone();
@@ -573,10 +613,12 @@ impl Publisher {
             .bind(id)
             .execute(&mut *tx)
             .await?;
-        sqlx::query("UPDATE media_uploads SET status='ready' WHERE media_id=?")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE media_uploads SET status='ready',observed_offset=size WHERE media_id=?",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
         transfer_event(&mut tx, id, &upload.agent_id, "ready").await?;
         tx.commit().await?;
         upload.status = "ready".into();
@@ -701,8 +743,14 @@ async fn transfer_event(
     agent: &str,
     status: &str,
 ) -> Result<()> {
+    let (offset, size, last_error): (i64, i64, Option<String>) = sqlx::query_as(
+        "SELECT observed_offset,size,last_error FROM media_uploads WHERE media_id=?",
+    )
+    .bind(id)
+    .fetch_one(&mut **tx)
+    .await?;
     sqlx::query("INSERT INTO events(kind,payload) VALUES('media.transfer',?)")
-        .bind(json!({"media_id":id,"agent_id":agent,"status":status}).to_string())
+        .bind(json!({"media_id":id,"agent_id":agent,"status":status,"offset":offset,"size":size,"error":last_error,"event_at":chrono::Utc::now().to_rfc3339()}).to_string())
         .execute(&mut **tx)
         .await?;
     Ok(())

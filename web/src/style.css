@@ -1336,6 +1336,9 @@ fieldset {
 .work-table .journal {
   padding: var(--space-4) 0;
 }
+.panel > .load-more {
+  margin: var(--space-4) var(--space-6);
+}
 @media (max-width: 1000px) {
   .work-table colgroup {
     display: none;

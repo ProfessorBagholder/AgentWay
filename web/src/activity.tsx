@@ -1,4 +1,8 @@
-import { useQuery } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import { cache, request } from "./api";
 import {
   upsertPublication,
@@ -18,6 +22,65 @@ export interface BridgeConnection {
   state: string;
   publish_enabled: boolean;
   activity: BridgeActivity | null;
+}
+export interface MediaTransfer {
+  cursor: number;
+  id: string;
+  agent_name: string | null;
+  mime: string;
+  size: number;
+  offset: number;
+  status:
+    | "receiving"
+    | "ready"
+    | "interrupted"
+    | "checksum_mismatch"
+    | "cancelling"
+    | "cancelled"
+    | "expiring"
+    | "expired";
+  last_error: string | null;
+  created_at: string | null;
+  has_publication: boolean;
+}
+interface TransferPage {
+  items: MediaTransfer[];
+  next: number | null;
+}
+export function upsertTransfer(transfer: MediaTransfer) {
+  cache.setQueryData(["media-transfer", transfer.id], transfer);
+  cache.setQueryData<InfiniteData<TransferPage>>(["media-transfers"], (old) => {
+    if (!old) return old;
+    const found = old.pages.some((page) =>
+      page.items.some((row) => row.id === transfer.id),
+    );
+    return {
+      ...old,
+      pages: old.pages.map((page, index) => ({
+        ...page,
+        items: found
+          ? page.items.map((row) => (row.id === transfer.id ? transfer : row))
+          : index === 0
+            ? [transfer, ...page.items]
+            : page.items,
+      })),
+    };
+  });
+}
+export function useTransfers() {
+  const loaded = useInfiniteQuery({
+    queryKey: ["media-transfers"],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      request<TransferPage>(
+        `/api/media-transfers${pageParam ? `?before=${pageParam}` : ""}`,
+      ),
+    getNextPageParam: (last) => last.next ?? undefined,
+  });
+  return {
+    ...loaded,
+    data: loaded.data?.pages.flatMap((page) => page.items),
+  };
 }
 export function upsertConnection(connection: BridgeConnection) {
   cache.setQueryData<BridgeConnection[]>(["agent-connections"], (old) => {

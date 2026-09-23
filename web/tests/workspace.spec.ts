@@ -44,6 +44,9 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/publications", (r) =>
     r.fulfill({ json: [publication] }),
   );
+  await page.route("**/api/media-transfers", (r) =>
+    r.fulfill({ json: { items: [], next: null } }),
+  );
   await page.route("**/api/publications/upload", (r) =>
     r.fulfill({
       json: {
@@ -124,6 +127,142 @@ test("real task rows update without navigation or unrelated fetching", async ({
   ).toBeVisible();
   expect(reads).toEqual([]);
   expect(documents).toEqual([]);
+});
+test("transfer work shows attribution, progress and a single diagnostic chain", async ({
+  page,
+}) => {
+  const transfer = {
+    cursor: 1,
+    id: "63ed6842-5159-4fa2-a1fa-177aab931fed",
+    agent_name: "Grok",
+    mime: "video/mp4",
+    size: 113246208,
+    offset: 33554432,
+    status: "interrupted",
+    last_error: "media_transport_uncertain",
+    created_at: "2026-09-22T12:00:00Z",
+    has_publication: false,
+  };
+  await page.route("**/api/media-transfers", (r) =>
+    r.fulfill({ json: { items: [transfer], next: null } }),
+  );
+  let current = {
+    ...transfer,
+    last_error: transfer.last_error as string | null,
+  };
+  await page.route(`**/api/media-transfers/${transfer.id}`, (r) =>
+    r.fulfill({ json: current }),
+  );
+  await page.route(`**/api/media-transfers/${transfer.id}/history?*`, (r) =>
+    r.fulfill({
+      json: {
+        items: [
+          { sequence: 1, status: "reserved", offset: 0, size: transfer.size },
+          {
+            sequence: 2,
+            status: "receiving",
+            offset: transfer.offset,
+            size: transfer.size,
+          },
+          {
+            sequence: 3,
+            status: "interrupted",
+            offset: transfer.offset,
+            size: transfer.size,
+            error: transfer.last_error,
+          },
+        ],
+        next: null,
+      },
+    }),
+  );
+  await page.goto("/#/tasks");
+  const title = "Video transfer · 108 MiB";
+  await expect(page.getByRole("link", { name: title })).toBeVisible();
+  const row = page.locator(".work-table tr").filter({ hasText: title });
+  await expect(row.getByText("Grok", { exact: true })).toBeVisible();
+  await expect(row.getByText("media_transport_uncertain")).toBeVisible();
+  await page.getByRole("link", { name: title }).click();
+  await expect(page.getByText("33,554,432 / 113,246,208 bytes")).toBeVisible();
+  await page.getByRole("link", { name: "View activity" }).click();
+  await page
+    .getByRole("button", { name: /Video transfer.*Transfer media/ })
+    .click();
+  await expect(page.locator(".journal li")).toHaveCount(3);
+  await expect(page.getByText("media_transport_uncertain")).toBeVisible();
+  current = {
+    ...transfer,
+    offset: transfer.size,
+    status: "ready",
+    last_error: null,
+  };
+  await page.evaluate((id) => {
+    (window as any).testEvents.dispatchEvent(
+      new MessageEvent("media.transfer", {
+        data: JSON.stringify({ media_id: id }),
+      }),
+    );
+  }, transfer.id);
+  await expect(page.getByText("Ready", { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    page.locator("main").getByText("Grok", { exact: true }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth > innerWidth,
+    ),
+  ).toBe(false);
+});
+test("a published video's transfer is part of its activity, not another row", async ({
+  page,
+}) => {
+  const id = "63ed6842-5159-4fa2-a1fa-177aab931fed";
+  await page.route("**/api/media-transfers", (r) =>
+    r.fulfill({
+      json: {
+        items: [
+          {
+            cursor: 1,
+            id,
+            agent_name: "Muse",
+            mime: "video/mp4",
+            size: 4,
+            offset: 4,
+            status: "ready",
+            last_error: null,
+            created_at: "2026-09-21T11:00:00Z",
+            has_publication: true,
+          },
+        ],
+        next: null,
+      },
+    }),
+  );
+  await page.route("**/api/publications/upload/history?*", (r) =>
+    r.fulfill({
+      json: {
+        media_id: id,
+        items: [{ sequence: 2, publication }],
+        next: null,
+      },
+    }),
+  );
+  await page.route(`**/api/media-transfers/${id}/history?*`, (r) =>
+    r.fulfill({
+      json: {
+        items: [{ sequence: 1, status: "ready", offset: 4, size: 4 }],
+        next: null,
+      },
+    }),
+  );
+  await page.goto("/#/activity");
+  await expect(page.locator(".work-table tbody > tr")).toHaveCount(1);
+  await page
+    .getByRole("button", { name: /Podcast teaser.*Upload video/ })
+    .click();
+  await expect(page.locator(".journal li")).toHaveCount(2);
+  await expect(page.getByText("Ready", { exact: true })).toBeVisible();
 });
 test("routes, theme, platform fields and task history survive navigation", async ({
   page,

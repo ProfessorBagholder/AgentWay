@@ -94,6 +94,7 @@ impl Publisher {
     pub fn admin_router(&self) -> Router {
         Router::new()
             .merge(super::workspace::routes())
+            .merge(super::transfer_activity::routes())
             .merge(super::connections::routes())
             .route("/health/media", get(media_health))
             .route("/api/youtube", get(status))

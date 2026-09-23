@@ -1,6 +1,6 @@
 # ADR 0001: Resumable agent-to-bridge media transport
 
-Date: 21 September 2026. Status: accepted; integration on the resumable-receiving feature branch, pending live-agent acceptance and merge. Scope: local/self-hosted AgentWay, preserving the Rust application and current YouTube flow.
+Date: 21 September 2026. Status: accepted and implemented in main after live Grok Bot acceptance. Scope: local/self-hosted AgentWay, preserving the Rust application and current YouTube flow.
 
 ## Problem
 
