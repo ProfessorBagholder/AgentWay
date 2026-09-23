@@ -528,6 +528,7 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
         "complete_agent_task",
         "fail_agent_task",
         "cancel_agent_task",
+        "acknowledge_agent_task_result",
         "create_resumable_media_upload",
         "get_media_upload",
         "complete_media_upload",

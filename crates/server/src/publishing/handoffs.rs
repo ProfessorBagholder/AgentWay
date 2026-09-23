@@ -57,6 +57,7 @@ pub(super) struct Handoff {
     pub status: String,
     pub result: Option<String>,
     pub error: Option<String>,
+    pub result_acknowledged_at: Option<String>,
     #[serde(skip_serializing)]
     #[sqlx(rename = "claim_hash")]
     _claim_hash: Option<String>,
@@ -146,6 +147,7 @@ pub(super) fn agent_routes() -> Router<Publisher> {
         .route("/v1/agent-tasks/{id}/complete", post(complete))
         .route("/v1/agent-tasks/{id}/fail", post(fail))
         .route("/v1/agent-tasks/{id}/cancel", post(cancel))
+        .route("/v1/agent-tasks/{id}/ack-result", post(ack_result))
 }
 fn valid_text(value: &str, max: usize) -> bool {
     !value.trim().is_empty()
@@ -372,6 +374,29 @@ impl Publisher {
         tx.commit().await?;
         Ok(serde_json::to_value(row)?)
     }
+    pub(super) async fn acknowledge_handoff_result(&self, id: &str) -> Result<Value> {
+        let _guard = self.0.mutation.lock().await;
+        let mut tx = self.0.db.begin().await?;
+        let changed = sqlx::query("UPDATE agent_handoffs SET result_acknowledged_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),revision=revision+1 WHERE id=? AND sender_id=? AND status IN ('completed','failed','cancelled') AND result_acknowledged_at IS NULL AND EXISTS(SELECT 1 FROM agent_connections WHERE id=? AND disconnected=0)")
+            .bind(id).bind(self.connection_id()).bind(self.connection_id())
+            .execute(&mut *tx).await?;
+        let row: Option<Handoff> =
+            sqlx::query_as("SELECT rowid AS cursor,* FROM agent_handoffs WHERE id=?")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let row = row.ok_or_else(missing)?;
+        if row.sender_id != self.connection_id() {
+            return Err(missing());
+        }
+        if changed.rows_affected() == 1 {
+            Self::handoff_event(&mut tx, &row, "result_acknowledged").await?;
+        } else if row.result_acknowledged_at.is_none() {
+            return Err(conflict("Task has no result to acknowledge"));
+        }
+        tx.commit().await?;
+        Ok(serde_json::to_value(row)?)
+    }
 }
 async fn agents(http::AgentState(p): http::AgentState) -> Api<Value> {
     Ok(Json(p.discover_agents().await?))
@@ -421,6 +446,9 @@ async fn fail(
 }
 async fn cancel(http::AgentState(p): http::AgentState, Path(id): Path<String>) -> Api<Value> {
     Ok(Json(p.cancel_handoff(&id).await?))
+}
+async fn ack_result(http::AgentState(p): http::AgentState, Path(id): Path<String>) -> Api<Value> {
+    Ok(Json(p.acknowledge_handoff_result(&id).await?))
 }
 async fn owner_list(State(p): State<Publisher>, Query(q): Query<ListQuery>) -> Api<Value> {
     Ok(Json(
@@ -552,6 +580,12 @@ mod tests {
         assert_eq!(listed[0].recipient_id, "receiver");
         assert_eq!(sender.discover_agents().await.unwrap()[0]["id"], "receiver");
         let created = sender.create_handoff(input()).await.unwrap();
+        assert!(
+            sender
+                .acknowledge_handoff_result(created["id"].as_str().unwrap())
+                .await
+                .is_err()
+        );
         assert_eq!(sender.create_handoff(input()).await.unwrap(), created);
         assert_eq!(
             receiver
@@ -690,14 +724,29 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(done["status"], "completed");
+        assert!(done["result_acknowledged_at"].is_null());
+        assert!(receiver.acknowledge_handoff_result(id).await.is_err());
+        assert!(
+            p.for_connection("stranger")
+                .acknowledge_handoff_result(id)
+                .await
+                .is_err()
+        );
         assert_eq!(
             sender.get_handoff(id, false).await.unwrap()["result"],
             "Verified"
         );
+        let acknowledged = sender.acknowledge_handoff_result(id).await.unwrap();
+        assert!(acknowledged["result_acknowledged_at"].is_string());
+        assert_eq!(
+            sender.acknowledge_handoff_result(id).await.unwrap(),
+            acknowledged
+        );
         let history = sender.handoff_history(id, 0).await.unwrap();
-        assert_eq!(history["items"].as_array().unwrap().len(), 4);
+        assert_eq!(history["items"].as_array().unwrap().len(), 5);
         assert_eq!(history["items"][0]["task"]["action"], "created");
         assert_eq!(history["items"][3]["task"]["action"], "completed");
+        assert_eq!(history["items"][4]["task"]["action"], "result_acknowledged");
         assert!(!history.to_string().contains("claim_token"));
         assert!(sender.cancel_handoff(id).await.is_err());
     }

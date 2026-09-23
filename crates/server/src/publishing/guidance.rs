@@ -1,7 +1,7 @@
 use super::PublishInput;
 use serde_json::{Value, json};
 
-pub(super) const VERSION: &str = "15";
+pub(super) const VERSION: &str = "16";
 pub(super) const INSTRUCTIONS: &str = include_str!("agent-instructions.md");
 
 pub(super) fn payload(reservation_bytes: i64, max_video_bytes: i64) -> Value {

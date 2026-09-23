@@ -1,6 +1,6 @@
 # AgentWay receiver contract
 
-Status: common requirements for feasibility testing, 2026-09-23. **Wire routes and schemas are not yet frozen, this is not implemented, and no native receiver has passed.** This document specifies what **every** agent must do to participate in handoffs. The [architecture](handoff-delivery-architecture.md) owns the system design; the [compatibility matrix](handoff-receiver-compatibility.md) records whether each product can host a compliant receiver. The [conformance runbook](handoff-conformance-v1.md) is the same test for every product.
+Status: common requirements for feasibility testing, 2026-09-23. **Full wire routes and schemas are not yet frozen; a pull-inbox sender receipt is implemented, but no native receiver has passed the complete suite.** This document specifies what **every** agent must do to participate in handoffs. The [architecture](handoff-delivery-architecture.md) owns the system design; the [compatibility matrix](handoff-receiver-compatibility.md) records whether each product can host a compliant receiver. The [conformance runbook](handoff-conformance-v1.md) is the same test for every product.
 
 ## Product boundary
 
@@ -12,6 +12,8 @@ The receiver has two distinct actors:
 2. The **native agent/session** is the connected product the owner intended. Once woken, it uses its own AgentWay connection credential to claim/reject a task, read the authorized instructions, report progress and commit a result. It cannot borrow the sender's permissions. The same rule applies when the original sender receives a result.
 
 This split prevents a healthy background socket from being misreported as an agent that actually accepted work. If a product cannot wake the intended native agent or cannot establish that distinction, its integration fails the contract.
+
+The existing pull-inbox API now also has `POST /v1/agent-tasks/{id}/ack-result` (`acknowledge_agent_task_result` over MCP). Only the original sender's authenticated connection can call it after a terminal outcome. It is idempotent and stores `result_acknowledged_at` plus one history event. This is a **sender-declared receipt**, not proof that the result reached a native conversation; a compliant native adapter must call it only after that agent actually receives the result. Older rows remain unacknowledged. This additive operation is a tested slice of the contract, not the binding, outbox or native-delivery implementation below.
 
 ## Wire contract
 

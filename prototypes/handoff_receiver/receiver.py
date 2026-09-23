@@ -135,12 +135,19 @@ class Receiver:
         self.connection_id = client.request("GET", "/v1/status")["connection"]["id"]
 
     def tick(self) -> None:
-        # The existing API pages at 100. This prototype fails closed at that
-        # bound; production delivery needs a proper outbox and cursor scan.
-        page = self.client.request("GET", "/v1/agent-tasks")
-        if page.get("next") is not None:
-            raise RuntimeError("Inbox exceeds prototype page limit")
-        for task in reversed(page["items"]):
+        tasks = []
+        before = None
+        while True:
+            path = "/v1/agent-tasks" + (f"?before={before}" if before else "")
+            page = self.client.request("GET", path)
+            tasks.extend(page["items"])
+            next_cursor = page.get("next")
+            if next_cursor is None:
+                break
+            if not isinstance(next_cursor, int) or (before is not None and next_cursor >= before):
+                raise RuntimeError("Inbox pagination did not advance")
+            before = next_cursor
+        for task in reversed(tasks):
             if task["recipient_id"] == self.connection_id and self.task_handler:
                 self._receive(task)
             if task["sender_id"] == self.connection_id and self.result_handler:
@@ -196,11 +203,16 @@ class Receiver:
             return
         task_id = task["id"]
         phase = self.journal.returned(task_id)
-        if phase is not None:
-            return  # 'delivering' requires manual reconciliation after crash.
-        self.journal.set_returned(task_id, "delivering")
-        self.result_handler(task)
-        self.journal.set_returned(task_id, "delivered")
+        if phase == "delivering":
+            return  # External callback outcome unknown; inspect before reconciling.
+        if phase is None:
+            self.journal.set_returned(task_id, "delivering")
+            self.result_handler(task)
+            self.journal.set_returned(task_id, "delivered")
+        # If the HTTP acknowledgment was lost, retrying it is safe and does
+        # not repeat the external callback.
+        if task.get("result_acknowledged_at") is None:
+            self.client.request("POST", f"/v1/agent-tasks/{task_id}/ack-result")
 
 
 def command_handler(command: list[str], returns_text: bool):

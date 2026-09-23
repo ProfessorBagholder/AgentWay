@@ -173,6 +173,20 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
+        description = "Sender acknowledges a terminal task result after its own agent has received it. Idempotent; completion alone is not delivery to the sender."
+    )]
+    async fn acknowledge_agent_task_result(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<UploadId>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .acknowledge_handoff_result(&input.id)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
         description = "Update an existing video's metadata/settings without reuploading. Read get_youtube_video first and supply its exact etag. Omitted fields are preserved; settings.localizations replaces the complete translation map. Stable request_id and identical retries only reconcile once a write was attempted. completed means verified, verification_pending means accepted, outcome_unknown means uncertain: never send a new UUID to bypass uncertainty. Scheduling requires an unpublished private video and user authorization; clear_schedule cancels it. Existing video-management consent required."
     )]
     async fn update_youtube_video(

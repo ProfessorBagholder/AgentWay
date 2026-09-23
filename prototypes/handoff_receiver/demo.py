@@ -19,6 +19,21 @@ from receiver import AgentWayError, Client, Journal, Receiver
 ROOT = Path(__file__).resolve().parents[2]
 
 
+class LoseFirstResultAck(Client):
+    """Commit the first sender receipt but simulate losing its HTTP response."""
+
+    def __init__(self, base_url: str, token: str):
+        super().__init__(base_url, token)
+        self.lost = False
+
+    def request(self, method: str, path: str, body: dict | None = None) -> dict:
+        result = super().request(method, path, body)
+        if method == "POST" and path.endswith("/ack-result") and not self.lost:
+            self.lost = True
+            raise AgentWayError(503, "simulated lost receipt response")
+        return result
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -84,7 +99,7 @@ def run() -> None:
                 recipient_token = owner(
                     management, "POST", f"/api/agent-connections/{recipient['id']}/token"
                 )["token"]
-                sender_client = Client(agents, sender_token)
+                sender_client = LoseFirstResultAck(agents, sender_token)
                 recipient_client = Client(agents, recipient_token)
                 sender_client.request("GET", "/v1/status")
                 recipient_client.request("GET", "/v1/status")
@@ -93,6 +108,12 @@ def run() -> None:
                     "POST",
                     f"/api/agent-handoff-grants/{sender['id']}",
                     {"recipient_id": recipient["id"], "enabled": True},
+                )
+                owner(
+                    management,
+                    "POST",
+                    f"/api/agent-handoff-grants/{recipient['id']}",
+                    {"recipient_id": sender["id"], "enabled": True},
                 )
                 delivered: list[dict] = []
                 sender_worker = Receiver(
@@ -115,14 +136,23 @@ def run() -> None:
                 )
                 for _ in range(40):
                     recipient_worker.tick()
-                    sender_worker.tick()
-                    if delivered:
+                    try:
+                        sender_worker.tick()
+                    except AgentWayError as error:
+                        assert error.status == 503 and sender_client.lost
+                    if delivered and sender_client.lost:
                         break
                     time.sleep(0.1)
                 assert len(delivered) == 1, "No result returned to sender worker"
                 assert delivered[0]["id"] == created["id"]
                 assert delivered[0]["result"] == "Acknowledged: " + nonce
                 assert delivered[0]["status"] == "completed"
+                assert delivered[0]["result_acknowledged_at"] is None
+                assert sender_client.request(
+                    "GET", f"/v1/agent-tasks/{created['id']}"
+                )["result_acknowledged_at"] is not None
+                sender_worker.tick()  # Reconcile lost HTTP response, no second callback.
+                assert len(delivered) == 1
                 try:
                     sender_client.request(
                         "POST", f"/v1/agent-tasks/{created['id']}/claim",
@@ -145,6 +175,40 @@ def run() -> None:
                 sender_worker.tick()
                 recipient_worker.tick()
                 assert len(delivered) == 1, "Result delivered twice after restart"
+                assert sender_client.request(
+                    "GET", f"/v1/agent-tasks/{created['id']}"
+                )["result_acknowledged_at"] is not None
+                reverse_results: list[dict] = []
+                reverse_sender = Receiver(
+                    recipient_client, Journal(directory / "recipient.sqlite"), None,
+                    lambda task: reverse_results.append(task),
+                )
+                reverse_recipient = Receiver(
+                    sender_client, Journal(directory / "sender.sqlite"),
+                    lambda task: "Reverse acknowledged: " + task["instructions"], None,
+                )
+                reverse_nonce = uuid.uuid4().hex
+                reverse = recipient_client.request(
+                    "POST", "/v1/agent-tasks",
+                    {
+                        "request_id": str(uuid.uuid4()),
+                        "recipient_id": sender["id"],
+                        "title": "Reverse harmless receiver probe",
+                        "instructions": reverse_nonce,
+                    },
+                )
+                for _ in range(40):
+                    reverse_recipient.tick()
+                    reverse_sender.tick()
+                    if reverse_results:
+                        break
+                    time.sleep(0.1)
+                assert len(reverse_results) == 1
+                assert reverse_results[0]["id"] == reverse["id"]
+                assert reverse_results[0]["result"] == "Reverse acknowledged: " + reverse_nonce
+                assert recipient_client.request(
+                    "GET", f"/v1/agent-tasks/{reverse['id']}"
+                )["result_acknowledged_at"] is not None
                 attempts = []
                 uncertain = sender_client.request(
                     "POST", "/v1/agent-tasks",
@@ -177,8 +241,9 @@ def run() -> None:
                 assert recipient_client.request(
                     "GET", f"/v1/agent-tasks/{uncertain['id']}"
                 )["status"] == "claimed"
-                print("PASS: isolated AgentWay task completed and returned automatically")
+                print("PASS: isolated AgentWay tasks completed and returned in both directions")
                 print("PASS: restart scan did not repeat either callback")
+                print("PASS: lost sender receipt response reconciled without callback replay")
                 print("PASS: wrong-principal claim denied; uncertain adapter not replayed")
                 print("Scope: synthetic local workers, not the native Codex or Grok Bot apps")
             finally:
