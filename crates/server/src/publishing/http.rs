@@ -9,8 +9,6 @@ use axum::{
     routing::{get, post, put},
 };
 use futures_util::StreamExt;
-use sha2::{Digest, Sha256};
-use subtle::ConstantTimeEq;
 use tokio::io::AsyncWriteExt;
 
 pub struct Error(anyhow::Error);
@@ -27,6 +25,23 @@ impl IntoResponse for Error {
             self.0.to_string()
         };
         (StatusCode::BAD_REQUEST, Json(json!({"error":message}))).into_response()
+    }
+}
+// Bridge middleware supplies authenticated state; admin routes retain the local owner context.
+struct AgentState(Publisher);
+impl axum::extract::FromRequestParts<Publisher> for AgentState {
+    type Rejection = StatusCode;
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &Publisher,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Self(
+            parts
+                .extensions
+                .get::<Publisher>()
+                .cloned()
+                .unwrap_or_else(|| state.clone()),
+        ))
     }
 }
 type Api<T> = std::result::Result<Json<T>, Error>;
@@ -52,6 +67,7 @@ impl Publisher {
     pub fn admin_router(&self) -> Router {
         Router::new()
             .merge(super::workspace::routes())
+            .merge(super::connections::routes())
             .route("/api/youtube", get(status))
             .route("/api/youtube/config", post(config))
             .route("/api/youtube/connect", post(connect))
@@ -128,30 +144,20 @@ async fn authenticate(State(p): State<Publisher>, req: Request, next: Next) -> R
     if req.headers().contains_key("origin") {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if p.setting("agent_disconnected")
-        .await
-        .ok()
-        .flatten()
-        .as_deref()
-        == Some("true")
-    {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let credential = bearer_credential(req.headers());
-    let expected = match p.secret("agent_token").await {
-        Ok(s) => s,
-        Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
-    };
-    let failure = match credential {
-        Err(reason) => Some(reason),
-        Ok(actual)
-            if !bool::from(
-                Sha256::digest(actual.as_bytes()).ct_eq(&Sha256::digest(expected.as_bytes())),
-            ) =>
-        {
-            Some("token_mismatch")
+    let mut failure = None;
+    let authenticated = match bearer_credential(req.headers()) {
+        Err(reason) => {
+            failure = Some(reason);
+            None
         }
-        Ok(_) => None,
+        Ok(actual) => match p.authenticate_connection(actual).await {
+            Ok(Some(agent)) => Some(agent),
+            Ok(None) => {
+                failure = Some("token_mismatch");
+                None
+            }
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        },
     };
     if let Some(reason) = failure {
         // Bounded diagnostics: never record header values, credentials or request URLs.
@@ -171,8 +177,8 @@ async fn authenticate(State(p): State<Publisher>, req: Request, next: Next) -> R
         )
             .into_response();
     }
-    // Record only known authenticated bridge operations, never tokens, query strings,
-    // media bytes or client-supplied names. A shared token cannot identify an agent.
+    let p = authenticated.expect("successful authentication has a connection");
+    // Attribute requests using the credential, never client-supplied names.
     let path = req.uri().path();
     let operation = match (req.method().as_str(), path) {
         ("GET", "/v1/status") => Some("Checked connection"),
@@ -195,13 +201,15 @@ async fn authenticate(State(p): State<Publisher>, req: Request, next: Next) -> R
     {
         tracing::warn!("Could not record authenticated bridge activity");
     }
+    let mut req = req;
+    req.extensions_mut().insert(p);
     let mut response = next.run(req).await;
     response
         .headers_mut()
         .insert("cache-control", "no-store".parse().unwrap());
     response
 }
-async fn connection(State(p): State<Publisher>) -> Api<Value> {
+async fn connection(AgentState(p): AgentState) -> Api<Value> {
     Ok(Json(p.workspace_connection().await?))
 }
 #[derive(Deserialize)]
@@ -209,7 +217,7 @@ struct ConnectionName {
     name: String,
 }
 async fn name_connection(
-    State(p): State<Publisher>,
+    AgentState(p): AgentState,
     Json(input): Json<ConnectionName>,
 ) -> Api<Value> {
     let name = input.name.trim();
@@ -217,13 +225,12 @@ async fn name_connection(
         return Err(anyhow::anyhow!("Connection name must contain 1–80 characters").into());
     }
     p.set("agent_connection_name", name).await?;
-    p.emit("bridge.name", json!({"name":name})).await?;
-    connection(State(p)).await
+    p.connection_changed().await
 }
-async fn status(State(p): State<Publisher>) -> Api<Value> {
+async fn status(AgentState(p): AgentState) -> Api<Value> {
     Ok(Json(p.status().await?))
 }
-async fn config(State(p): State<Publisher>, Json(c): Json<Config>) -> Api<Value> {
+async fn config(AgentState(p): AgentState, Json(c): Json<Config>) -> Api<Value> {
     if c.client_id.len() > 512
         || !c.client_id.ends_with(".apps.googleusercontent.com")
         || c.client_secret.is_empty()
@@ -253,7 +260,7 @@ async fn config(State(p): State<Publisher>, Json(c): Json<Config>) -> Api<Value>
     p.emit("youtube.status", status.clone()).await?;
     Ok(Json(status))
 }
-async fn policy(State(p): State<Publisher>, Json(c): Json<Policy>) -> Api<Value> {
+async fn policy(AgentState(p): AgentState, Json(c): Json<Policy>) -> Api<Value> {
     let _guard = p.0.mutation.lock().await;
     p.set(
         "private_only",
@@ -264,7 +271,7 @@ async fn policy(State(p): State<Publisher>, Json(c): Json<Policy>) -> Api<Value>
     p.emit("youtube.status", status.clone()).await?;
     Ok(Json(status))
 }
-async fn bridge_url(State(p): State<Publisher>, Json(c): Json<BridgeUrl>) -> Api<Value> {
+async fn bridge_url(AgentState(p): AgentState, Json(c): Json<BridgeUrl>) -> Api<Value> {
     if !c.url.is_empty() {
         let u = reqwest::Url::parse(&c.url).map_err(|_| {
             anyhow::anyhow!("Enter an HTTPS origin, such as https://agentway.example.com")
@@ -288,10 +295,10 @@ async fn bridge_url(State(p): State<Publisher>, Json(c): Json<BridgeUrl>) -> Api
     p.emit("youtube.status", status.clone()).await?;
     Ok(Json(status))
 }
-async fn token(State(p): State<Publisher>) -> Api<Value> {
+async fn token(AgentState(p): AgentState) -> Api<Value> {
     Ok(Json(json!({"token":p.secret("agent_token").await?})))
 }
-async fn rotate(State(p): State<Publisher>) -> Api<Value> {
+async fn rotate(AgentState(p): AgentState) -> Api<Value> {
     p.set_secret(
         "agent_token",
         &format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()),
@@ -300,7 +307,7 @@ async fn rotate(State(p): State<Publisher>) -> Api<Value> {
     Ok(Json(json!({"token":p.secret("agent_token").await?})))
 }
 async fn connect(
-    State(p): State<Publisher>,
+    AgentState(p): AgentState,
     headers: HeaderMap,
 ) -> std::result::Result<Response, Error> {
     let host = headers
@@ -313,7 +320,7 @@ async fn connect(
     Ok(([("set-cookie",format!("agentway_oauth={state}; HttpOnly; SameSite=Lax; Path=/api/youtube/callback; Max-Age=600"))],Json(json!({"url":url}))).into_response())
 }
 async fn callback(
-    State(p): State<Publisher>,
+    AgentState(p): AgentState,
     headers: HeaderMap,
     Query(q): Query<Callback>,
 ) -> Response {
@@ -336,33 +343,34 @@ async fn callback(
             .into_response(),
     }
 }
-async fn disconnect(State(p): State<Publisher>) -> Api<Value> {
+async fn disconnect(AgentState(p): AgentState) -> Api<Value> {
     p.disconnect().await?;
     Ok(Json(p.status().await?))
 }
-async fn list(State(p): State<Publisher>) -> Api<Vec<Publication>> {
+async fn list(AgentState(p): AgentState) -> Api<Vec<Publication>> {
     Ok(Json(p.list().await?))
 }
-async fn retry(State(p): State<Publisher>, Path(id): Path<String>) -> Api<Publication> {
+async fn retry(AgentState(p): AgentState, Path(id): Path<String>) -> Api<Publication> {
     Ok(Json(p.retry(&id).await?))
 }
 async fn publication(
-    State(p): State<Publisher>,
+    AgentState(p): AgentState,
     Path(id): Path<String>,
 ) -> Api<PublicationVerification> {
     Ok(Json(p.verified_publication(&id).await?))
 }
-async fn create_media(State(p): State<Publisher>, Json(input): Json<MediaInput>) -> Api<Value> {
+async fn create_media(AgentState(p): AgentState, Json(input): Json<MediaInput>) -> Api<Value> {
     Ok(Json(p.create_media(input).await?))
 }
-async fn publish(State(p): State<Publisher>, Json(input): Json<PublishInput>) -> Api<Publication> {
+async fn publish(AgentState(p): AgentState, Json(input): Json<PublishInput>) -> Api<Publication> {
     Ok(Json(p.enqueue(input).await?))
 }
-async fn remove_media(State(p): State<Publisher>, Path(id): Path<String>) -> Api<Value> {
+async fn remove_media(AgentState(p): AgentState, Path(id): Path<String>) -> Api<Value> {
     let _guard = p.0.mutation.lock().await;
     if Uuid::parse_str(&id).is_err() {
         return Err(anyhow::anyhow!("Invalid media ID").into());
     }
+    p.check_media_owner(&id).await?;
     let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM publications WHERE media_id=?")
         .bind(&id)
         .fetch_one(&p.0.db)
@@ -380,14 +388,12 @@ async fn remove_media(State(p): State<Publisher>, Path(id): Path<String>) -> Api
     let _ = tokio::fs::remove_file(p.0.dir.join("media").join(id)).await;
     Ok(Json(json!({"removed":true})))
 }
-async fn upload_media(
-    State(p): State<Publisher>,
-    Path(id): Path<String>,
-    body: Body,
-) -> Api<Value> {
+async fn upload_media(AgentState(p): AgentState, Path(id): Path<String>, body: Body) -> Api<Value> {
     if Uuid::parse_str(&id).is_err() {
         return Err(anyhow::anyhow!("Invalid media ID").into());
     }
+    p.check_publish_access().await?;
+    p.check_media_owner(&id).await?;
     let media: Media = sqlx::query_as("SELECT * FROM media WHERE id=?")
         .bind(&id)
         .fetch_optional(&p.0.db)
@@ -426,6 +432,7 @@ async fn upload_media(
         file.sync_all().await?;
         drop(file);
         let _guard = p.0.mutation.lock().await;
+        p.check_publish_access().await?;
         let ready: Option<i64> = sqlx::query_scalar("SELECT ready FROM media WHERE id=?")
             .bind(&id)
             .fetch_optional(&p.0.db)
@@ -447,42 +454,39 @@ async fn upload_media(
     Ok(Json(json!({"media_id":id,"ready":true})))
 }
 
-async fn video_status(State(p): State<Publisher>, Path(id): Path<String>) -> Api<Value> {
+async fn video_status(AgentState(p): AgentState, Path(id): Path<String>) -> Api<Value> {
     Ok(Json(p.youtube_video_status(&id).await?))
 }
 async fn set_visibility(
-    State(p): State<Publisher>,
+    AgentState(p): AgentState,
     Path(id): Path<String>,
     Json(input): Json<VisibilityInput>,
 ) -> Api<VideoOperation> {
     Ok(Json(p.set_video_visibility(&id, input).await?))
 }
 async fn video_operations(
-    State(p): State<Publisher>,
+    AgentState(p): AgentState,
     Path(id): Path<String>,
 ) -> Api<Vec<VideoOperation>> {
     Ok(Json(p.video_operations(&id).await?))
 }
-async fn video_operation(
-    State(p): State<Publisher>,
-    Path(id): Path<String>,
-) -> Api<VideoOperation> {
+async fn video_operation(AgentState(p): AgentState, Path(id): Path<String>) -> Api<VideoOperation> {
     Ok(Json(p.video_operation(&id).await?))
 }
 
 async fn delete_replaced_video(
-    State(p): State<Publisher>,
+    AgentState(p): AgentState,
     Path(id): Path<String>,
     Json(input): Json<DeleteInput>,
 ) -> Api<VideoOperation> {
     Ok(Json(p.delete_replaced_video(&id, input).await?))
 }
 
-async fn channel_profile(State(p): State<Publisher>) -> Api<Value> {
+async fn channel_profile(AgentState(p): AgentState) -> Api<Value> {
     Ok(Json(p.youtube_channel().await?))
 }
 async fn channel_description(
-    State(p): State<Publisher>,
+    AgentState(p): AgentState,
     Json(input): Json<ChannelDescriptionInput>,
 ) -> Result<Response, Error> {
     let result = p.set_channel_description(input).await?;
@@ -495,13 +499,13 @@ async fn channel_description(
 }
 
 async fn playlists(
-    State(p): State<Publisher>,
+    AgentState(p): AgentState,
     Query(input): Query<podcast::PlaylistQuery>,
 ) -> Api<Value> {
     Ok(Json(p.youtube_playlists(input).await?))
 }
 async fn podcast(
-    State(p): State<Publisher>,
+    AgentState(p): AgentState,
     Json(input): Json<podcast::PodcastInput>,
 ) -> Result<Response, Error> {
     let result = p.manage_podcast(input).await?;
@@ -512,6 +516,6 @@ async fn podcast(
     };
     Ok((status, Json(result)).into_response())
 }
-async fn podcast_operation(State(p): State<Publisher>, Path(id): Path<String>) -> Api<Value> {
+async fn podcast_operation(AgentState(p): AgentState, Path(id): Path<String>) -> Api<Value> {
     Ok(Json(p.podcast_operation(&id).await?))
 }

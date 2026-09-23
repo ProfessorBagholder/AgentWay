@@ -22,10 +22,14 @@ Theme is one native radio group styled as a segmented selector, with Light/sun a
 
 Tasks and Activity log use the same WorkTable and WorkMetadata components in web/src/workspace.tsx. Same column widths, header treatment, padding, alignment, date formatting and badges. Columns: Task/Activity, Agent, Platform, Created, Status. The title is primary. Tasks navigate to work details/recovery; Activity expands one correlated operation into its steps. Use an explicit chevron button with aria-expanded/aria-controls. Never replace a whole list on a row update or fetch step history before expansion.
 
-Below 1000px, reflow each record into labelled fields; do not hide Agent, Platform, date, status or actions. Long titles wrap without pushing columns offscreen. Keep semantic table markup and column headers. Agent names must come from recorded attribution, never a guessed product or today's renamed connection. Historical missing attribution displays Not recorded; new uploads snapshot the configured connection name. Do not imply support for independently identified credentials until the backend supports it.
+Below 1000px, reflow each record into labelled fields; do not hide Agent, Platform, date, status or actions. Long titles wrap without pushing columns offscreen. Keep semantic table markup and column headers. Agent names must come from recorded attribution, never a guessed product or today's renamed connection. Historical missing attribution displays Not recorded; new uploads snapshot the authenticated connection name and persist its ID. A credential identifies a connection, not a unique process or conversation.
 
 ## Verification before presenting any UI change
 
 Check all affected pages in dark and light modes, desktop and 390px mobile, and one intermediate width. Inspect screenshots, not just build output. Check column alignment, consistent spacing, wrapped titles, keyboard focus and control hit areas; no horizontal page overflow or missing fields. Exercise changed interactions, pending/failure recovery and scoped refresh. Mock writes when testing permissions/configuration; never mutate the user's live settings as test data. Compare related screens using the shared component and review the diff for unrelated changes. Document what was actually tested. Existing violations are not precedents to copy.
 
 Feature branch deployments are for user testing. Only after explicit merge approval: merge, return to main, rebuild/restart and verify for normal use.
+
+## Agent connections
+
+Agents lists every configured connection with the established short product label and status badge. Connect agent uses the Settings row alignment and existing controls; selecting a product creates an independent credential, not an inferred connection. Only authenticated traffic establishes Connected. Details retain the clicked label, platform permission, scoped setup instructions and Disconnect. Update only the affected connection on SSE events. Platform agent links show connected agents with permission. Never use a shared token to infer a second agent or reset existing credentials during enrollment.

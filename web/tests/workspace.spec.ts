@@ -16,15 +16,19 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/bootstrap", (r) =>
     r.fulfill({ json: { agents: [], tasks: [], cursor: 0 } }),
   );
-  await page.route("**/api/publishing/connection", (r) =>
+  await page.route("**/api/agent-connections", (r) =>
     r.fulfill({
-      json: {
-        id: "publishing",
-        name: "Muse",
-        state: "Connected",
-        publish_enabled: true,
-        activity: null,
-      },
+      json: [
+        {
+          id: "publishing",
+          name: "Muse",
+          product: "Muse",
+          revision: 1,
+          state: "Connected",
+          publish_enabled: true,
+          activity: null,
+        },
+      ],
     }),
   );
   await page.route("**/api/youtube", (r) =>
@@ -186,7 +190,7 @@ test("agent permission writes and disconnect require explicit actions", async ({
 }) => {
   let accessWrites = 0,
     disconnectWrites = 0;
-  await page.route("**/api/publishing/connection/access", async (r) => {
+  await page.route("**/api/agent-connections/publishing/access", async (r) => {
     accessWrites++;
     expect(r.request().postDataJSON()).toEqual({ publish_enabled: false });
     await r.fulfill({
@@ -199,20 +203,25 @@ test("agent permission writes and disconnect require explicit actions", async ({
       },
     });
   });
-  await page.route("**/api/publishing/connection/disconnect", async (r) => {
-    disconnectWrites++;
-    await r.fulfill({
-      json: {
-        id: "publishing",
-        name: "Muse",
-        state: "Disconnected",
-        publish_enabled: false,
-        activity: null,
-      },
-    });
-  });
+  await page.route(
+    "**/api/agent-connections/publishing/disconnect",
+    async (r) => {
+      disconnectWrites++;
+      await r.fulfill({
+        json: {
+          id: "publishing",
+          name: "Muse",
+          state: "Disconnected",
+          publish_enabled: false,
+          activity: null,
+        },
+      });
+    },
+  );
   await page.goto("/#/agents/publishing");
-  await page.getByRole("checkbox", { name: "Publish videos" }).uncheck();
+  await page
+    .getByRole("checkbox", { name: "Publish and manage YouTube" })
+    .uncheck();
   expect(accessWrites).toBe(0);
   await page.getByRole("button", { name: "Save permissions" }).click();
   await expect(
@@ -284,6 +293,181 @@ test("operational lists retain attribution and aligned columns at all sizes", as
           () => document.documentElement.scrollWidth > innerWidth,
         ),
       ).toBe(false);
+    }
+  }
+});
+
+test("connect a second agent and update only its authenticated status", async ({
+  page,
+}) => {
+  const grok = {
+    id: "grok-test",
+    name: "Grok",
+    product: "Grok Bot",
+    revision: 1,
+    state: "Setup incomplete",
+    publish_enabled: true,
+    activity: null,
+  };
+  let creates = 0;
+  await page.route("**/api/agent-connections", async (r) => {
+    if (r.request().method() === "POST") {
+      creates++;
+      expect(r.request().postDataJSON()).toEqual({
+        product: "Grok Bot",
+        publish_enabled: true,
+      });
+      if (creates === 1) {
+        await r.fulfill({
+          status: 503,
+          json: { error: "Connection could not be created. Try again." },
+        });
+        return;
+      }
+      await r.fulfill({ json: grok });
+    } else
+      await r.fulfill({
+        json: [
+          {
+            id: "publishing",
+            name: "Muse",
+            product: "Muse",
+            revision: 1,
+            state: "Connected",
+            publish_enabled: true,
+            activity: null,
+          },
+        ],
+      });
+  });
+  await page.goto("/#/agents");
+  await page.getByRole("link", { name: "Connect agent", exact: true }).click();
+  await page
+    .getByRole("checkbox", { name: "Publish and manage YouTube" })
+    .check();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "Connection could not be created. Try again.",
+  );
+  await expect(
+    page.getByRole("checkbox", { name: "Publish and manage YouTube" }),
+  ).toBeChecked();
+  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await expect(page).toHaveURL(/#\/agents\/grok-test$/);
+  await expect(
+    page.getByRole("heading", { name: "Grok", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Setup incomplete", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Agent connection instructions")).toHaveValue(
+    /https:\/\/test.example\/mcp/,
+  );
+  const reads: string[] = [],
+    documents: string[] = [];
+  page.on("request", (r) => {
+    if (r.url().includes("/api/")) reads.push(r.url());
+    if (r.isNavigationRequest()) documents.push(r.url());
+  });
+  await page.evaluate(
+    (c) =>
+      (window as any).testEvents.dispatchEvent(
+        new MessageEvent("agent.connection", {
+          data: JSON.stringify({ ...c, state: "Connected", revision: 2 }),
+        }),
+      ),
+    grok,
+  );
+  await expect(page.getByText("Connected", { exact: true })).toBeVisible();
+  await page
+    .getByRole("navigation")
+    .getByRole("link", { name: "Agents", exact: true })
+    .click();
+  await expect(
+    page.getByRole("link", { name: "Muse", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Grok", exact: true }),
+  ).toBeVisible();
+  expect(creates).toBe(2);
+  expect(reads).toEqual([]);
+  expect(documents).toEqual([]);
+});
+
+test("connection screens retain alignment and controls across sizes and themes", async ({
+  page,
+}, testInfo) => {
+  await page.route("**/api/agent-connections", (r) =>
+    r.fulfill({
+      json: [
+        {
+          id: "publishing",
+          name: "Muse",
+          product: "Muse",
+          revision: 1,
+          state: "Connected",
+          publish_enabled: true,
+          activity: null,
+        },
+        {
+          id: "grok-test",
+          name: "Grok",
+          product: "Grok Bot",
+          revision: 1,
+          state: "Setup incomplete",
+          publish_enabled: true,
+          activity: null,
+        },
+      ],
+    }),
+  );
+  for (const theme of ["dark", "light"]) {
+    await page.goto("/#/settings");
+    await page
+      .getByRole("radio", {
+        name: theme === "dark" ? "Dark" : "Light",
+        exact: true,
+      })
+      .check();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    for (const width of [1440, 900, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      for (const route of [
+        "agents",
+        "agents/connect",
+        "agents/grok-test",
+        "platforms",
+      ]) {
+        await page.goto(`/#/${route}`);
+        await expect(page.locator("main h1")).toBeVisible();
+        if (route === "agents")
+          await expect(
+            page.getByRole("link", { name: "Grok", exact: true }),
+          ).toBeVisible();
+        if (route === "agents/connect") {
+          const select = page.getByLabel("Agent", { exact: true });
+          await expect(select).toBeVisible();
+          expect((await select.boundingBox())!.height).toBeGreaterThanOrEqual(
+            44,
+          );
+          await select.focus();
+        }
+        if (route === "agents/grok-test")
+          await expect(
+            page.getByLabel("Agent connection instructions"),
+          ).toBeVisible();
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth > innerWidth,
+          ),
+        ).toBe(false);
+        await page.screenshot({
+          path: testInfo.outputPath(
+            `${theme}-${width}-${route.replaceAll("/", "-")}.png`,
+          ),
+          fullPage: true,
+        });
+      }
     }
   }
 });

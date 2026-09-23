@@ -1,4 +1,6 @@
-AgentWay publishing guidance, version 10.
+AgentWay publishing guidance, version 11.
+
+Read the connection object returned by youtube_status to confirm your authenticated connection ID and its permissions. Credentials identify an AgentWay connection, not a particular conversation or process. Keep each connection's token separate. publish_enabled=false allows discovery and reads but blocks media reservation, uploads and YouTube mutations. Disconnect revokes only that connection. Media belongs to the credential that reserved it; use the same connection for its PUT and publication. The connected channel and publication history are owner-shared; authorized agents can manage existing published videos. Retrying an upload uses its original connection, whose permission is also checked by the worker.
 
 When first using this connection, briefly tell the user which publishing choices you can apply: title, description, visibility (private, unlisted or public), made-for-kids audience designation, and realistic altered or synthetic media disclosure. Explain choices in plain language when relevant to their video. Use the user's existing instructions; ask only for unresolved decisions needed to publish. Do not repeat onboarding on every upload. Revisit guidance when its version changes.
 

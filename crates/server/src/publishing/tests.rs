@@ -315,13 +315,7 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
     let init=client.post(&url).bearer_auth(&token).header("accept","application/json, text/event-stream")
         .json(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"integration-test","version":"1"}}})).send().await.unwrap();
     assert_eq!(init.status(), StatusCode::OK);
-    let session = init
-        .headers()
-        .get("mcp-session-id")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_owned();
+    assert!(init.headers().get("mcp-session-id").is_none());
     let response = mcp_json(init).await;
     assert!(response["result"]["capabilities"]["tools"].is_object());
     assert_eq!(response["result"]["instructions"], guidance::INSTRUCTIONS);
@@ -351,7 +345,7 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
         .post(&url)
         .bearer_auth(&token)
         .header("accept", "application/json, text/event-stream")
-        .header("mcp-session-id", &session)
+        .header("mcp-protocol-version", "2025-03-26")
         .json(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
         .send()
         .await
@@ -361,7 +355,7 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
             .post(&url)
             .bearer_auth(&token)
             .header("accept", "application/json, text/event-stream")
-            .header("mcp-session-id", &session)
+            .header("mcp-protocol-version", "2025-03-26")
             .json(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}))
             .send()
             .await
@@ -401,7 +395,7 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
     )
     .unwrap();
     assert_eq!(args.input.privacy, "private");
-    let called=mcp_json(client.post(&url).bearer_auth(&token).header("accept","application/json, text/event-stream").header("mcp-session-id",&session)
+    let called=mcp_json(client.post(&url).bearer_auth(&token).header("accept","application/json, text/event-stream").header("mcp-protocol-version","2025-03-26")
         .json(&json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"youtube_status","arguments":{}}})).send().await.unwrap()).await;
     assert_eq!(called["result"]["structuredContent"]["private_only"], true);
     assert!(called["result"]["structuredContent"]["account"].is_null());
@@ -525,12 +519,15 @@ async fn activity_tracks_authenticated_requests_and_persists_events() {
     let next = p.activity().await.unwrap().unwrap();
     assert_eq!(next.revision, first.revision + 1);
     let payload: String = sqlx::query_scalar(
-        "SELECT payload FROM events WHERE kind='bridge.activity' ORDER BY sequence DESC LIMIT 1",
+        "SELECT payload FROM events WHERE kind='agent.connection' ORDER BY sequence DESC LIMIT 1",
     )
     .fetch_one(&p.0.db)
     .await
     .unwrap();
-    let event: BridgeActivity = serde_json::from_str(&payload).unwrap();
+    let event: BridgeActivity = serde_json::from_value(
+        serde_json::from_str::<Value>(&payload).unwrap()["activity"].clone(),
+    )
+    .unwrap();
     assert_eq!(event.revision, next.revision);
     assert!(!payload.contains(&p.secret("agent_token").await.unwrap()));
 }
@@ -1791,4 +1788,200 @@ async fn full_episode_can_be_inserted_into_an_ordinary_empty_playlist() {
     assert_eq!(p.manage_podcast(input).await.unwrap(), result);
     assert_eq!(writes.load(Ordering::SeqCst), 1);
     server.abort();
+}
+
+#[tokio::test]
+async fn independent_connections_isolate_credentials_media_permissions_and_attribution() {
+    let (_dir, p) = fixture().await;
+    account(&p).await;
+    p.set("agent_connection_name", "Muse").await.unwrap();
+    let muse_token = p.secret("agent_token").await.unwrap();
+    let (status, created) = admin(
+        &p,
+        "POST",
+        "/api/agent-connections",
+        json!({"product":"Grok Bot","publish_enabled":true}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(created["state"], "Setup incomplete");
+    assert_eq!(created["product"], "Grok Bot");
+    let id = created["id"].as_str().unwrap();
+    let grok = p.for_connection(id);
+    let grok_token = grok.secret("agent_token").await.unwrap();
+    assert_ne!(grok_token, muse_token);
+    let (_, discovery) = call(&grok, "GET", "/v1/status", vec![], true).await;
+    assert_eq!(discovery["connection"]["id"], id);
+    assert_eq!(discovery["connection"]["state"], "Connected");
+    assert!(p.activity().await.unwrap().is_none());
+    let muse_media = media(&p).await;
+    assert_eq!(
+        call(
+            &grok,
+            "PUT",
+            &format!("/v1/media/{muse_media}"),
+            vec![1, 2, 3, 4],
+            true
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &grok,
+            "DELETE",
+            &format!("/v1/media/{muse_media}"),
+            vec![],
+            true
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert!(grok.enqueue(input(muse_media.clone())).await.is_err());
+    let muse_job = p.enqueue(input(muse_media)).await.unwrap();
+    assert!(grok.retry(&muse_job.id).await.is_err());
+    let grok_media = media(&grok).await;
+    let job = grok.enqueue(input(grok_media)).await.unwrap();
+    assert_eq!(job.agent_name.as_deref(), Some("Grok"));
+    let owner: String = sqlx::query_scalar("SELECT agent_id FROM publications WHERE id=?")
+        .bind(&job.id)
+        .fetch_one(&p.0.db)
+        .await
+        .unwrap();
+    assert_eq!(owner, id);
+    admin(
+        &p,
+        "POST",
+        &format!("/api/agent-connections/{id}/access"),
+        json!({"publish_enabled":false}),
+    )
+    .await;
+    assert!(grok.retry(&job.id).await.is_err());
+    assert!(p.check_publish_access().await.is_ok());
+    assert_eq!(
+        call(&grok, "GET", "/v1/status", vec![], true).await.0,
+        StatusCode::OK
+    );
+    admin(
+        &p,
+        "POST",
+        &format!("/api/agent-connections/{id}/disconnect"),
+        json!({}),
+    )
+    .await;
+    assert!(
+        p.authenticate_connection(&grok_token)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        p.authenticate_connection(&muse_token)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(p.secret("agent_token").await.unwrap(), muse_token);
+    assert_eq!(
+        call(&p, "GET", "/v1/status", vec![], true).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        grok.workspace_connection().await.unwrap()["state"],
+        "Disconnected"
+    );
+    let (_, connections) = admin(&p, "GET", "/api/agent-connections", json!(null)).await;
+    let encoded = connections.to_string();
+    assert!(!encoded.contains(&grok_token) && !encoded.contains(&muse_token));
+    assert_eq!(
+        call(&p, "GET", "/api/agent-connections", vec![], true)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn mcp_uses_the_credential_on_each_call_and_rejects_revocation() {
+    let (_dir, p) = fixture().await;
+    let (_, created) = admin(
+        &p,
+        "POST",
+        "/api/agent-connections",
+        json!({"product":"Grok Bot","publish_enabled":false}),
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+    let grok = p.for_connection(id);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let app = p.bridge_router();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = reqwest::Client::new();
+    let muse = p.secret("agent_token").await.unwrap();
+    let token = grok.secret("agent_token").await.unwrap();
+    for (credential, expected) in [(&token, id), (&muse, "publishing"), (&token, id)] {
+        let response=client.post(&url).bearer_auth(credential)
+            .header("accept","application/json, text/event-stream").header("mcp-protocol-version","2025-03-26")
+            .json(&json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"youtube_status","arguments":{}}})).send().await.unwrap();
+        let value = mcp_json(response).await;
+        assert_eq!(
+            value["result"]["structuredContent"]["connection"]["id"],
+            expected
+        );
+    }
+    let denied=client.post(&url).bearer_auth(&token)
+        .header("accept","application/json, text/event-stream").header("mcp-protocol-version","2025-03-26")
+        .json(&json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"create_media_upload","arguments":{"size":4,"mime":"video/mp4"}}})).send().await.unwrap();
+    assert_eq!(mcp_json(denied).await["result"]["isError"], true);
+    p.disconnect_connection().await.unwrap();
+    assert!(p.authenticate_connection(&token).await.unwrap().is_some());
+    grok.disconnect_connection().await.unwrap();
+    let response = client
+        .post(&url)
+        .bearer_auth(&token)
+        .json(&json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    server.abort();
+}
+
+#[tokio::test]
+async fn connection_migration_preserves_original_ciphertext_and_permission() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    for sql in [
+        include_str!("../../../../migrations/0001_initial.sql"),
+        include_str!("../../../../migrations/0002_publishing.sql"),
+        include_str!("../../../../migrations/0003_bridge_activity.sql"),
+    ] {
+        sqlx::raw_sql(sql).execute(&db).await.unwrap();
+    }
+    let vault = vault::Vault::open(&dir.path().join("publishing")).unwrap();
+    let ciphertext = vault.seal("unchanged-test-credential").unwrap();
+    sqlx::query("INSERT INTO publishing_settings(key,value) VALUES('agent_token',?),('agent_connection_name','Muse'),('publish_enabled','false')").bind(&ciphertext).execute(&db).await.unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../../migrations/0009_agent_connections.sql"
+    ))
+    .execute(&db)
+    .await
+    .unwrap();
+    let p = Publisher::new(db, dir.path().join("publishing"), CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        p.secret("agent_token").await.unwrap(),
+        "unchanged-test-credential"
+    );
+    assert_eq!(p.setting("agent_token").await.unwrap().unwrap(), ciphertext);
+    assert!(p.check_publish_access().await.is_err());
+    assert_eq!(p.workspace_connection().await.unwrap()["name"], "Muse");
 }

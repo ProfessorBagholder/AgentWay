@@ -3,11 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClientProvider, type InfiniteData } from "@tanstack/react-query";
 import { Cable, Radio, Workflow, ScrollText, Settings } from "lucide-react";
 import { Snapshot, cache, request } from "./api";
-import {
-  upsertActivity,
-  renameConnection,
-  type BridgeActivity,
-} from "./activity";
+import { upsertConnection, type BridgeConnection } from "./activity";
 import { upsertPublication, type Publication } from "./publishing";
 import { Workspace, type Journal } from "./workspace";
 import "./style.css";
@@ -81,19 +77,10 @@ function App() {
             .cancelQueries({ queryKey: ["youtube"] })
             .then(() => cache.setQueryData(["youtube"], status));
         });
-        stream.addEventListener("bridge.name", (event) =>
-          renameConnection(JSON.parse((event as MessageEvent).data).name),
-        );
-        stream.addEventListener("bridge.activity", (event) =>
-          upsertActivity(
-            JSON.parse((event as MessageEvent).data) as BridgeActivity,
-          ),
-        );
-        stream.addEventListener("bridge.connection", (event) => {
-          const value = JSON.parse((event as MessageEvent).data);
-          void cache
-            .cancelQueries({ queryKey: ["bridge-connection"] })
-            .then(() => cache.setQueryData(["bridge-connection"], value));
+        stream.addEventListener("agent.connection", (event) => {
+          upsertConnection(
+            JSON.parse((event as MessageEvent).data) as BridgeConnection,
+          );
         });
         setReady(true);
       })

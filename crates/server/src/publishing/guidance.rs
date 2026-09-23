@@ -1,7 +1,7 @@
 use super::PublishInput;
 use serde_json::{Value, json};
 
-pub(super) const VERSION: &str = "10";
+pub(super) const VERSION: &str = "11";
 pub(super) const INSTRUCTIONS: &str = include_str!("agent-instructions.md");
 
 pub(super) fn payload() -> Value {

@@ -314,6 +314,7 @@ impl Publisher {
                 self.owned_playlist(playlist_id, &channel, &token).await?;
                 Uuid::parse_str(media_id)
                     .map_err(|_| anyhow::anyhow!("media_id must be a UUID"))?;
+                self.check_media_owner(media_id).await?;
                 let media: Media = sqlx::query_as("SELECT * FROM media WHERE id=? AND ready=1")
                     .bind(media_id)
                     .fetch_optional(&self.0.db)

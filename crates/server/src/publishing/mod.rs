@@ -1,4 +1,5 @@
 mod channel;
+mod connections;
 use channel::ChannelDescriptionInput;
 mod guidance;
 mod http;
@@ -23,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[derive(Clone)]
-pub struct Publisher(Arc<Inner>);
+pub struct Publisher(Arc<Inner>, Option<String>);
 struct Inner {
     db: SqlitePool,
     _lock: std::fs::File,
@@ -180,27 +181,24 @@ impl Publisher {
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(120))
             .build()?;
-        let this = Self(Arc::new(Inner {
-            db,
-            _lock: lock,
-            dir,
-            vault,
-            client,
-            endpoints: Endpoints::default(),
-            wake: Notify::new(),
-            transfers: Semaphore::new(2),
-            access_token: Mutex::new(None),
-            mutation: Mutex::new(()),
-            auth_failure_log: Mutex::new(None),
-            shutdown,
-        }));
-        if this.setting("agent_token").await?.is_none() {
-            this.set_secret(
-                "agent_token",
-                &format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple()),
-            )
-            .await?;
-        }
+        let this = Self(
+            Arc::new(Inner {
+                db,
+                _lock: lock,
+                dir,
+                vault,
+                client,
+                endpoints: Endpoints::default(),
+                wake: Notify::new(),
+                transfers: Semaphore::new(2),
+                access_token: Mutex::new(None),
+                mutation: Mutex::new(()),
+                auth_failure_log: Mutex::new(None),
+                shutdown,
+            }),
+            None,
+        );
+        this.initialize_connections().await?;
         Ok(this)
     }
     pub fn start_worker(&self) -> tokio::task::JoinHandle<()> {
@@ -208,6 +206,9 @@ impl Publisher {
         tokio::spawn(async move { this.worker().await })
     }
     async fn setting(&self, key: &str) -> Result<Option<String>> {
+        if let Some(value) = self.connection_setting(key).await? {
+            return Ok(value);
+        }
         Ok(
             sqlx::query_scalar("SELECT value FROM publishing_settings WHERE key=?")
                 .bind(key)
@@ -216,6 +217,9 @@ impl Publisher {
         )
     }
     async fn set(&self, key: &str, value: &str) -> Result<()> {
+        if self.set_connection_setting(key, value).await? {
+            return Ok(());
+        }
         sqlx::query("INSERT INTO publishing_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(key).bind(value).execute(&self.0.db).await?;
         Ok(())
     }
@@ -237,27 +241,18 @@ impl Publisher {
                 .await?;
         let manage_channel = self.setting("youtube_manage_channel").await?;
         Ok(
-            json!({"video_management_authorized": account.as_ref().is_some_and(|(id,_)| Some(id.as_str()) == manage_channel.as_deref()), "configured": self.setting("client_id").await?.is_some(), "account": account.map(|(id,name)| json!({"id":id,"name":name})), "private_only": self.setting("private_only").await?.as_deref() != Some("false"), "bridge_url":self.setting("bridge_url").await?.unwrap_or_default(), "agent_guidance":guidance::payload()}),
+            json!({"connection":self.workspace_connection().await?, "video_management_authorized": account.as_ref().is_some_and(|(id,_)| Some(id.as_str()) == manage_channel.as_deref()), "configured": self.setting("client_id").await?.is_some(), "account": account.map(|(id,name)| json!({"id":id,"name":name})), "private_only": self.setting("private_only").await?.as_deref() != Some("false"), "bridge_url":self.setting("bridge_url").await?.unwrap_or_default(), "agent_guidance":guidance::payload()}),
         )
     }
     pub async fn activity(&self) -> Result<Option<BridgeActivity>> {
-        Ok(
-            sqlx::query_as("SELECT last_seen,operation,revision FROM bridge_activity WHERE id=1")
-                .fetch_optional(&self.0.db)
-                .await?,
-        )
+        Ok(sqlx::query_as("SELECT last_seen,operation,revision FROM agent_connections WHERE id=? AND last_seen IS NOT NULL")
+            .bind(self.connection_id()).fetch_optional(&self.0.db).await?)
     }
     async fn record_activity(&self, operation: &str) -> Result<()> {
-        let mut tx = self.0.db.begin().await?;
-        let activity: BridgeActivity = sqlx::query_as(
-            "INSERT INTO bridge_activity(id,last_seen,operation) VALUES(1,strftime('%Y-%m-%dT%H:%M:%fZ','now'),?) ON CONFLICT(id) DO UPDATE SET last_seen=excluded.last_seen,operation=excluded.operation,revision=bridge_activity.revision+1 RETURNING last_seen,operation,revision")
-            .bind(operation).fetch_one(&mut *tx).await?;
-        sqlx::query("INSERT INTO events(kind,payload) VALUES('bridge.activity',?)")
-            .bind(serde_json::to_string(&activity)?)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        Ok(())
+        sqlx::query("UPDATE agent_connections SET last_seen=strftime('%Y-%m-%dT%H:%M:%fZ','now'),operation=?,revision=revision+1 WHERE id=? AND disconnected=0")
+            .bind(operation).bind(self.connection_id()).execute(&self.0.db).await?;
+        self.emit("agent.connection", self.workspace_connection().await?)
+            .await
     }
     pub async fn list(&self) -> Result<Vec<Publication>> {
         Ok(
@@ -351,11 +346,12 @@ impl Publisher {
         {
             bail!("Provide video up to 2 GiB or a PNG/JPEG podcast cover up to 2 MiB");
         }
+        self.check_publish_access().await?;
         let id = Uuid::new_v4().to_string();
         // Bound disk reservations, including unfinished transfers.
         let mut tx = self.0.db.begin().await?;
-        let result = sqlx::query("INSERT INTO media(id,size,mime) SELECT ?,?,? WHERE (SELECT COALESCE(SUM(size),0) FROM media)+?<=?")
-            .bind(&id).bind(input.size).bind(input.mime).bind(input.size).bind(MAX_MEDIA * 5).execute(&mut *tx).await?;
+        let result = sqlx::query("INSERT INTO media(id,size,mime,agent_id) SELECT ?,?,?,? WHERE (SELECT COALESCE(SUM(size),0) FROM media)+?<=?")
+            .bind(&id).bind(input.size).bind(input.mime).bind(self.connection_id()).bind(input.size).bind(MAX_MEDIA * 5).execute(&mut *tx).await?;
         if result.rows_affected() == 0 {
             bail!(
                 "Media storage limit reached (10 GiB). Remove unused media before uploading more."
@@ -393,6 +389,7 @@ impl Publisher {
                 .fetch_optional(&self.0.db)
                 .await?;
         if let Some((id, original)) = existing {
+            self.check_publication_owner(&id).await?;
             // Normalize old requests that predate this optional field, preserving retry IDs.
             let original: PublishInput = serde_json::from_str(&original)?;
             if serde_json::to_string(&original)? != encoded {
@@ -412,6 +409,7 @@ impl Publisher {
                 .fetch_optional(&self.0.db)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("Connect a YouTube account in Publishing first"))?;
+        self.check_media_owner(&input.media_id).await?;
         let media: Media = sqlx::query_as("SELECT * FROM media WHERE id=? AND ready=1")
             .bind(&input.media_id)
             .fetch_optional(&self.0.db)
@@ -422,14 +420,21 @@ impl Publisher {
         }
         let id = Uuid::new_v4().to_string();
         let agent_name = self.setting("agent_connection_name").await?;
-        sqlx::query("INSERT INTO publications(id,request_id,input,channel_id,media_id,title,total_bytes,agent_name) VALUES(?,?,?,?,?,?,?,?)")
-            .bind(&id).bind(&input.request_id).bind(encoded).bind(channel).bind(&media.id).bind(&input.title).bind(media.size).bind(agent_name).execute(&self.0.db).await?;
+        sqlx::query("INSERT INTO publications(id,request_id,input,channel_id,media_id,title,total_bytes,agent_name,agent_id) VALUES(?,?,?,?,?,?,?,?,?)")
+            .bind(&id).bind(&input.request_id).bind(encoded).bind(channel).bind(&media.id).bind(&input.title).bind(media.size).bind(agent_name).bind(self.connection_id()).execute(&self.0.db).await?;
         self.publish_event(&id).await?;
         self.0.wake.notify_one();
         self.publication(&id).await
     }
     pub async fn retry(&self, id: &str) -> Result<Publication> {
-        self.check_publish_access().await?;
+        let owner: String = sqlx::query_scalar("SELECT agent_id FROM publications WHERE id=?")
+            .bind(id)
+            .fetch_one(&self.0.db)
+            .await?;
+        if self.1.is_some() {
+            self.check_publication_owner(id).await?;
+        }
+        self.for_connection(&owner).check_publish_access().await?;
         sqlx::query("UPDATE publications SET status='queued',error=NULL,revision=revision+1 WHERE id=? AND status='interrupted'").bind(id).execute(&self.0.db).await?;
         self.publish_event(id).await?;
         self.0.wake.notify_one();
