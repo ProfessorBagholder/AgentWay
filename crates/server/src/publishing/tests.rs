@@ -519,6 +519,15 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
             .any(|t| t["name"] == "publish_youtube")
     );
     for name in [
+        "list_agents",
+        "create_agent_task",
+        "list_agent_tasks",
+        "get_agent_task",
+        "claim_agent_task",
+        "renew_agent_task",
+        "complete_agent_task",
+        "fail_agent_task",
+        "cancel_agent_task",
         "create_resumable_media_upload",
         "get_media_upload",
         "complete_media_upload",
@@ -549,6 +558,10 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
                 .any(|t| t["name"] == name)
         );
     }
+    let discovered=mcp_json(client.post(&url).bearer_auth(&token).header("accept","application/json, text/event-stream").header("mcp-protocol-version","2025-03-26")
+        .json(&json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_agents","arguments":{}}})).send().await.unwrap()).await;
+    assert!(discovered.get("error").is_none());
+    assert_eq!(discovered["result"]["isError"], false);
     let args: super::mcp::VisibilityRequest = serde_json::from_value(
         json!({"id":"publication","request_id":Uuid::new_v4().to_string(),"privacy":"private"}),
     )

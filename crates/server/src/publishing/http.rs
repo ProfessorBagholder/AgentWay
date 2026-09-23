@@ -19,6 +19,9 @@ impl<E: Into<anyhow::Error>> From<E> for Error {
 }
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
+        if let Some(error) = self.0.downcast_ref::<handoffs::HandoffError>() {
+            return (error.status, Json(json!({"error":error.message}))).into_response();
+        }
         if let Some(error) = self.0.downcast_ref::<transfers::TransferError>() {
             let mut response = (
                 StatusCode::from_u16(error.status).unwrap(),
@@ -96,6 +99,7 @@ impl Publisher {
             .merge(super::workspace::routes())
             .merge(super::transfer_activity::routes())
             .merge(super::connections::routes())
+            .merge(super::handoffs::admin_routes())
             .route("/health/media", get(media_health))
             .route("/api/youtube", get(status))
             .route("/api/youtube/config", post(config))
@@ -120,6 +124,7 @@ impl Publisher {
     pub fn bridge_router(&self) -> Router {
         Router::new()
             .route("/v1/status", get(status))
+            .merge(super::handoffs::agent_routes())
             .route("/v1/youtube/playlists", get(playlists))
             .route("/v1/youtube/podcasts", post(podcast))
             .route(

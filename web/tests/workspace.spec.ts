@@ -47,6 +47,9 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/media-transfers", (r) =>
     r.fulfill({ json: { items: [], next: null } }),
   );
+  await page.route("**/api/agent-handoffs", (r) =>
+    r.fulfill({ json: { items: [], next: null } }),
+  );
   await page.route("**/api/publications/upload", (r) =>
     r.fulfill({
       json: {
@@ -84,6 +87,124 @@ test.beforeEach(async ({ page }) => {
     }
     (window as any).EventSource = MockEvents;
   });
+});
+test("agent handoff appears in Tasks and its result updates in place", async ({
+  page,
+}) => {
+  const task = {
+    cursor: 1,
+    id: "handoff-1",
+    request_id: "request-1",
+    sender_id: "muse",
+    sender_name: "Muse",
+    recipient_id: "grok",
+    recipient_name: "Grok",
+    title: "Review episode",
+    instructions: "Check the transcript",
+    status: "queued",
+    result: null,
+    error: null,
+    lease_until: null,
+    created_at: "2026-09-23T12:00:00Z",
+    updated_at: "2026-09-23T12:00:00Z",
+    revision: 1,
+  };
+  await page.route("**/api/agent-handoffs", (r) =>
+    r.fulfill({ json: { items: [task], next: null } }),
+  );
+  await page.route("**/api/agent-handoffs/handoff-1", (r) =>
+    r.fulfill({ json: task }),
+  );
+  await page.route("**/api/agent-handoffs/handoff-1/history?*", (r) =>
+    r.fulfill({
+      json: {
+        items: [
+          { sequence: 1, task: { ...task, action: "created" } },
+          {
+            sequence: 2,
+            task: {
+              ...task,
+              action: "completed",
+              status: "completed",
+              result: "Looks good",
+              revision: 2,
+            },
+          },
+        ],
+        next: null,
+      },
+    }),
+  );
+  await page.goto("/#/tasks");
+  const row = page.getByRole("row", { name: /Review episode/ });
+  await expect(row).toContainText("Muse");
+  await expect(row).toContainText("Grok");
+  await page.evaluate(
+    (t) =>
+      (window as any).testEvents.dispatchEvent(
+        new MessageEvent("agent.handoff", {
+          data: JSON.stringify({
+            ...t,
+            status: "completed",
+            result: "Looks good",
+            revision: 2,
+          }),
+        }),
+      ),
+    task,
+  );
+  await expect(row).toContainText("Completed");
+  await row.getByRole("link", { name: "Review episode" }).click();
+  await expect(page.getByText("Check the transcript")).toBeVisible();
+  await page.getByRole("link", { name: "View activity" }).click();
+  await page.getByRole("button", { name: /Review episode/ }).click();
+  await expect(page.getByText("Looks good")).toBeVisible();
+});
+test("owner can grant a connected agent permission to assign another agent", async ({
+  page,
+}) => {
+  await page.route("**/api/agent-connections", (r) =>
+    r.fulfill({
+      json: [
+        {
+          id: "muse",
+          name: "Muse",
+          product: "Muse",
+          revision: 1,
+          state: "Connected",
+          publish_enabled: true,
+          activity: null,
+        },
+        {
+          id: "grok",
+          name: "Grok",
+          product: "Grok Bot",
+          revision: 1,
+          state: "Connected",
+          publish_enabled: true,
+          activity: null,
+        },
+      ],
+    }),
+  );
+  let grants: string[] = [];
+  await page.route("**/api/agent-handoff-grants/muse", (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON() as {
+        recipient_id: string;
+        enabled: boolean;
+      };
+      grants = body.enabled ? [body.recipient_id] : [];
+    }
+    return route.fulfill({ json: grants });
+  });
+  await page.goto("/#/agents/muse");
+  const checkbox = page.getByRole("checkbox", { name: "Assign tasks to Grok" });
+  await expect(checkbox).toBeVisible();
+  await checkbox.check();
+  await expect(checkbox).toBeChecked();
+  await checkbox.uncheck();
+  await expect(checkbox).not.toBeChecked();
 });
 test("real task rows update without navigation or unrelated fetching", async ({
   page,

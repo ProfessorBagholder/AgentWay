@@ -1,5 +1,10 @@
 import { Fragment, useState, type ReactNode } from "react";
-import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import { Moon, Sun, ArrowLeft, ExternalLink, ChevronRight } from "lucide-react";
 import { cache, request } from "./api";
 import {
@@ -25,6 +30,75 @@ const states: Record<string, string> = {
   uploaded: "Uploaded",
   interrupted: "Needs attention",
 };
+export interface AgentHandoff {
+  cursor: number;
+  id: string;
+  request_id: string;
+  sender_id: string;
+  sender_name: string;
+  recipient_id: string;
+  recipient_name: string;
+  title: string;
+  instructions: string;
+  status: "queued" | "claimed" | "completed" | "failed" | "cancelled";
+  result: string | null;
+  error: string | null;
+  lease_until: number | null;
+  created_at: string;
+  updated_at: string;
+  revision: number;
+}
+interface HandoffPage {
+  items: AgentHandoff[];
+  next: number | null;
+}
+function useHandoffs() {
+  const loaded = useInfiniteQuery<HandoffPage, Error>({
+    queryKey: ["agent-handoffs"],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      request<HandoffPage>(
+        `/api/agent-handoffs${pageParam ? `?before=${pageParam}` : ""}`,
+      ),
+    getNextPageParam: (last) => last.next ?? undefined,
+  });
+  return {
+    ...loaded,
+    rows: loaded.data?.pages.flatMap((page) => page.items) ?? [],
+  };
+}
+const handoffStates: Record<AgentHandoff["status"], string> = {
+  queued: "Queued",
+  claimed: "In progress",
+  completed: "Completed",
+  failed: "Needs attention",
+  cancelled: "Cancelled",
+};
+export function upsertHandoff(row: AgentHandoff) {
+  cache.setQueryData<InfiniteData<HandoffPage>>(["agent-handoffs"], (old) => {
+    if (!old) return old;
+    const prior = old.pages
+      .flatMap((page) => page.items)
+      .find((task) => task.id === row.id);
+    if (prior && prior.revision >= row.revision) return old;
+    if (!prior && row.cursor <= (old.pages[0]?.items[0]?.cursor ?? 0))
+      return old;
+    return {
+      ...old,
+      pages: old.pages.map((page, index) => ({
+        ...page,
+        items: prior
+          ? page.items.map((task) => (task.id === row.id ? row : task))
+          : index === 0
+            ? [row, ...page.items]
+            : page.items,
+      })),
+    };
+  });
+  cache.setQueryData<AgentHandoff>(["agent-handoff", row.id], (old) =>
+    old && old.revision >= row.revision ? old : row,
+  );
+}
 function Badge({ value }: { value: string }) {
   return (
     <span
@@ -191,6 +265,7 @@ function AgentControls({
           </div>
         </section>
       )}
+      {c.state !== "Disconnected" && <HandoffPermissions connection={c} />}
       {c.state !== "Disconnected" && (
         <ConnectionInstructions
           key={c.id + c.state}
@@ -494,9 +569,72 @@ function Youtube() {
     </>
   );
 }
+function HandoffPermissions({ connection }: { connection: BridgeConnection }) {
+  const connections = useConnections();
+  const grants = useQuery<string[]>({
+    queryKey: ["agent-handoff-grants", connection.id],
+    queryFn: () =>
+      request<string[]>(`/api/agent-handoff-grants/${connection.id}`),
+  });
+  const change = useMutation({
+    mutationFn: ({
+      recipient_id,
+      enabled,
+    }: {
+      recipient_id: string;
+      enabled: boolean;
+    }) =>
+      request<string[]>(`/api/agent-handoff-grants/${connection.id}`, {
+        recipient_id,
+        enabled,
+      }),
+    onSuccess: (ids) =>
+      cache.setQueryData(["agent-handoff-grants", connection.id], ids),
+  });
+  const peers = connections.data.filter(
+    (c) => c.id !== connection.id && c.state === "Connected",
+  );
+  if (!peers.length) return null;
+  return (
+    <section className="panel">
+      <div className="panel-title">
+        <h2>Agent access</h2>
+      </div>
+      <div className="pad">
+        {grants.isPending ? (
+          <Loading />
+        ) : grants.error ? (
+          <ErrorMessage error={grants.error} />
+        ) : (
+          peers.map((peer) => (
+            <label className="check" key={peer.id}>
+              <input
+                type="checkbox"
+                checked={grants.data.includes(peer.id)}
+                disabled={change.isPending}
+                onChange={(e) =>
+                  change.mutate({
+                    recipient_id: peer.id,
+                    enabled: e.target.checked,
+                  })
+                }
+              />
+              Assign tasks to {peer.name}
+              {peers.filter((candidate) => candidate.name === peer.name)
+                .length > 1 && ` · ${peer.id.slice(0, 8)}`}
+            </label>
+          ))
+        )}
+        <ErrorMessage error={change.error} />
+      </div>
+    </section>
+  );
+}
 function Tasks({ filter }: { filter: string }) {
   const loaded = usePublications(filter);
   const transfers = useTransfers();
+  const handoffs = useHandoffs();
+  const handoffRows = handoffs.rows;
   const standalone =
     transfers.data?.filter(
       (t) =>
@@ -518,6 +656,18 @@ function Tasks({ filter }: { filter: string }) {
       id: t.id,
       created: t.created_at ?? "",
     })),
+    ...handoffRows
+      .filter(
+        (task) =>
+          filter === "all" ||
+          (filter === "attention" && task.status === "failed") ||
+          (filter === "complete" && task.status === "completed"),
+      )
+      .map((task) => ({
+        kind: "handoff" as const,
+        id: task.id,
+        created: task.created_at,
+      })),
   ].sort((a, b) => b.created.localeCompare(a.created));
   return (
     <>
@@ -537,16 +687,23 @@ function Tasks({ filter }: { filter: string }) {
           </a>
         ))}
       </div>
-      {loaded.isPending || transfers.isPending ? (
+      {loaded.isPending || transfers.isPending || handoffs.isPending ? (
         <Loading />
-      ) : loaded.error || transfers.error ? (
-        <ErrorMessage error={loaded.error || transfers.error} />
+      ) : loaded.error || transfers.error || handoffs.error ? (
+        <ErrorMessage
+          error={loaded.error || transfers.error || handoffs.error}
+        />
       ) : records.length ? (
         <section className="panel">
           <WorkTable kind="Task">
             {records.map((record) =>
               record.kind === "publication" ? (
                 <TaskRow key={record.id} id={record.id} filter={filter} />
+              ) : record.kind === "handoff" ? (
+                <HandoffRow
+                  key={record.id}
+                  task={handoffRows.find((t) => t.id === record.id)!}
+                />
               ) : (
                 <TransferTaskRow
                   key={record.id}
@@ -555,11 +712,16 @@ function Tasks({ filter }: { filter: string }) {
               ),
             )}
           </WorkTable>
-          {transfers.hasNextPage && (
+          {(transfers.hasNextPage || handoffs.hasNextPage) && (
             <button
               className="load-more"
-              disabled={transfers.isFetchingNextPage}
-              onClick={() => void transfers.fetchNextPage()}
+              disabled={
+                transfers.isFetchingNextPage || handoffs.isFetchingNextPage
+              }
+              onClick={() => {
+                if (transfers.hasNextPage) void transfers.fetchNextPage();
+                if (handoffs.hasNextPage) void handoffs.fetchNextPage();
+              }}
             >
               Load more tasks
             </button>
@@ -570,6 +732,73 @@ function Tasks({ filter }: { filter: string }) {
           <h2>No tasks yet</h2>
         </div>
       )}
+    </>
+  );
+}
+function HandoffRow({ task }: { task: AgentHandoff }) {
+  return (
+    <tr>
+      <td data-label="Task">
+        <a href={`#/tasks/handoffs/${task.id}`} className="work-title-link">
+          {task.title}
+        </a>
+      </td>
+      <WorkMetadata
+        agent={task.sender_name}
+        destination={task.recipient_name}
+        created={task.created_at}
+        status={handoffStates[task.status]}
+      />
+    </tr>
+  );
+}
+function HandoffDetail({ id }: { id: string }) {
+  const task = useQuery<AgentHandoff>({
+    queryKey: ["agent-handoff", id],
+    queryFn: () => request<AgentHandoff>(`/api/agent-handoffs/${id}`),
+  });
+  if (task.isPending) return <Loading />;
+  if (task.error) return <ErrorMessage error={task.error} />;
+  const row = task.data;
+  return (
+    <>
+      <Back to="tasks">Tasks</Back>
+      <Heading title={row.title}>
+        <Badge value={handoffStates[row.status]} />
+      </Heading>
+      <div className="narrow stack">
+        <section className="panel pad">
+          <dl>
+            <dt>From</dt>
+            <dd>{row.sender_name}</dd>
+            <dt>To</dt>
+            <dd>{row.recipient_name}</dd>
+            <dt>Created</dt>
+            <dd>
+              <time dateTime={row.created_at}>
+                {new Date(row.created_at).toLocaleString()}
+              </time>
+            </dd>
+            <dt>Instructions</dt>
+            <dd className="handoff-text">{row.instructions}</dd>
+            {row.result && (
+              <>
+                <dt>Result</dt>
+                <dd className="handoff-text">{row.result}</dd>
+              </>
+            )}
+            {row.error && (
+              <>
+                <dt>Error</dt>
+                <dd className="handoff-text">{row.error}</dd>
+              </>
+            )}
+          </dl>
+        </section>
+        <a className="button" href={`#/activity?task=${row.id}`}>
+          View activity
+        </a>
+      </div>
     </>
   );
 }
@@ -674,7 +903,7 @@ function WorkTable({ kind, children }: { kind: string; children: ReactNode }) {
       </colgroup>
       <thead>
         <tr>
-          {[kind, "Agent", "Platform", "Created", "Status"].map((label) => (
+          {[kind, "Agent", "Destination", "Created", "Status"].map((label) => (
             <th key={label} scope="col">
               {label}
             </th>
@@ -687,19 +916,19 @@ function WorkTable({ kind, children }: { kind: string; children: ReactNode }) {
 }
 function WorkMetadata({
   agent,
-  platform,
+  destination,
   created,
   status,
 }: {
   agent: string | null | undefined;
-  platform: string;
+  destination: string;
   created: string | null;
   status: string;
 }) {
   return (
     <>
       <td data-label="Agent">{agent || "Not recorded"}</td>
-      <td data-label="Platform">{platform}</td>
+      <td data-label="Destination">{destination}</td>
       <td data-label="Created">
         {created ? (
           <time dateTime={created}>{new Date(created).toLocaleString()}</time>
@@ -717,7 +946,7 @@ function PublicationMetadata({ p }: { p: Publication }) {
   return (
     <WorkMetadata
       agent={p.agent_name}
-      platform="YouTube"
+      destination="YouTube"
       created={p.created_at}
       status={states[p.status]}
     />
@@ -752,7 +981,7 @@ function TransferMetadata({ t }: { t: MediaTransfer }) {
   return (
     <WorkMetadata
       agent={t.agent_name}
-      platform="—"
+      destination="—"
       created={t.created_at}
       status={transferStates[t.status]}
     />
@@ -1225,6 +1454,101 @@ function ActivityItem({ id, errorsOnly }: { id: string; errorsOnly: boolean }) {
     </>
   );
 }
+interface HandoffHistoryPage {
+  items: { sequence: number; task: AgentHandoff & { action: string } }[];
+  next: number | null;
+}
+function HandoffSteps({ id }: { id: string }) {
+  const history = useInfiniteQuery<HandoffHistoryPage, Error>({
+    queryKey: ["agent-handoff-history", id],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      request<HandoffHistoryPage>(
+        `/api/agent-handoffs/${id}/history?after=${pageParam}`,
+      ),
+    getNextPageParam: (last) => last.next ?? undefined,
+  });
+  if (history.isPending) return <Loading />;
+  if (history.error) return <ErrorMessage error={history.error} />;
+  return (
+    <div className="journal">
+      <ol>
+        {history.data.pages
+          .flatMap((page) => page.items)
+          .map(({ sequence, task }) => (
+            <li key={sequence}>
+              <time dateTime={task.updated_at}>
+                {new Date(task.updated_at).toLocaleString()}
+              </time>
+              <strong>
+                {(
+                  {
+                    created: "Queued",
+                    claimed: "Claimed",
+                    renewed: "Claim renewed",
+                    completed: "Completed",
+                    failed: "Failed",
+                    cancelled: "Cancelled",
+                  } as Record<string, string>
+                )[task.action] ?? handoffStates[task.status]}
+              </strong>
+              {task.action === "completed" && task.result && (
+                <span>{task.result}</span>
+              )}
+              {task.action === "failed" && task.error && (
+                <p className="error">{task.error}</p>
+              )}
+            </li>
+          ))}
+      </ol>
+      {history.hasNextPage && (
+        <button
+          disabled={history.isFetchingNextPage}
+          onClick={() => void history.fetchNextPage()}
+        >
+          Load more steps
+        </button>
+      )}
+      <a href={`#/tasks/handoffs/${id}`}>View task</a>
+    </div>
+  );
+}
+function HandoffActivityItem({ task }: { task: AgentHandoff }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <tr className={open ? "work-expanded" : ""}>
+        <td data-label="Activity">
+          <button
+            className="work-expand"
+            aria-expanded={open}
+            aria-controls={`handoff-history-${task.id}`}
+            onClick={() => setOpen(!open)}
+          >
+            <ChevronRight size={16} aria-hidden="true" />
+            <span>
+              <span className="work-title-link">{task.title}</span>
+              <span className="work-operation">Agent handoff</span>
+            </span>
+          </button>
+        </td>
+        <WorkMetadata
+          agent={task.sender_name}
+          destination={task.recipient_name}
+          created={task.created_at}
+          status={handoffStates[task.status]}
+        />
+      </tr>
+      {open && (
+        <tr className="work-history" id={`handoff-history-${task.id}`}>
+          <td colSpan={5}>
+            <HandoffSteps id={task.id} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
 function Activity({
   task,
   transfer,
@@ -1236,6 +1560,7 @@ function Activity({
 }) {
   const loaded = usePublications();
   const transfers = useTransfers();
+  const handoffs = useHandoffs();
   const standalone =
     transfers.data?.filter(
       (t) =>
@@ -1263,6 +1588,19 @@ function Activity({
           id: t.id,
           created: t.created_at ?? "",
         }))),
+    ...(transfer
+      ? []
+      : handoffs.rows
+          .filter(
+            (row) =>
+              (!task || row.id === task) &&
+              (!errorsOnly || row.status === "failed"),
+          )
+          .map((row) => ({
+            kind: "handoff" as const,
+            id: row.id,
+            created: row.created_at,
+          }))),
   ].sort((a, b) => b.created.localeCompare(a.created));
   const suffix = task
     ? `&task=${task}`
@@ -1287,10 +1625,12 @@ function Activity({
         </a>
         {(task || transfer) && <a href="#/activity">Clear task filter</a>}
       </div>
-      {loaded.isPending || transfers.isPending ? (
+      {loaded.isPending || transfers.isPending || handoffs.isPending ? (
         <Loading />
-      ) : loaded.error || transfers.error ? (
-        <ErrorMessage error={loaded.error || transfers.error} />
+      ) : loaded.error || transfers.error || handoffs.error ? (
+        <ErrorMessage
+          error={loaded.error || transfers.error || handoffs.error}
+        />
       ) : (
         <section className="panel">
           <WorkTable kind="Activity">
@@ -1301,6 +1641,11 @@ function Activity({
                   id={row.id}
                   errorsOnly={errorsOnly}
                 />
+              ) : row.kind === "handoff" ? (
+                <HandoffActivityItem
+                  key={row.id}
+                  task={handoffs.rows.find((task) => task.id === row.id)!}
+                />
               ) : (
                 <TransferActivityItem
                   key={row.id}
@@ -1309,11 +1654,16 @@ function Activity({
               ),
             )}
           </WorkTable>
-          {transfers.hasNextPage && (
+          {(transfers.hasNextPage || handoffs.hasNextPage) && (
             <button
               className="load-more"
-              disabled={transfers.isFetchingNextPage}
-              onClick={() => void transfers.fetchNextPage()}
+              disabled={
+                transfers.isFetchingNextPage || handoffs.isFetchingNextPage
+              }
+              onClick={() => {
+                if (transfers.hasNextPage) void transfers.fetchNextPage();
+                if (handoffs.hasNextPage) void handoffs.fetchNextPage();
+              }}
             >
               Load more activity
             </button>
@@ -1463,6 +1813,8 @@ export function Workspace({ route }: { route: string }) {
   if (path === "platforms/youtube" || path === "platforms/connect")
     return <Youtube />;
   if (path === "tasks") return <Tasks filter={query.get("state") || "all"} />;
+  if (path.startsWith("tasks/handoffs/"))
+    return <HandoffDetail key={path} id={path.split("/")[2]} />;
   if (path.startsWith("tasks/transfers/"))
     return <TransferDetail key={path} id={path.split("/")[2]} />;
   if (path.startsWith("tasks/"))

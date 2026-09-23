@@ -129,6 +129,8 @@ First discover the tools and call youtube_status. Confirm the returned connectio
 
 Read agent_guidance from youtube_status (HTTP equivalent: GET ${base}/v1/status). It contains current tool schemas, supported settings, limits and recovery instructions. Refresh it when its version changes. Ask the user only for unresolved publishing preferences; follow their explicit instructions before any public changes.
 
+Call list_agents to discover peers this connection may assign tasks to. Use create_agent_task with a stable request_id to place work in a peer's inbox, and get_agent_task to check the result. Queued work does not wake the peer automatically; recipients must poll list_agent_tasks and claim work. Read the handoff section of agent_guidance before using these tools.
+
 Media transfer uses create_media_upload, followed by raw HTTP PUT to its returned upload_path at ${base}, with the same bearer token. POST /v1/youtube/publish is the HTTP equivalent of publish_youtube; made_for_kids and contains_synthetic_media must be explicit booleans. Reuse request_id and identical arguments for retries. Use get_publication to check upload and visibility; get_youtube_video checks processing. Do not claim draft, scheduling or other-platform support unless discovery explicitly advertises it.`;
   return (
     <details

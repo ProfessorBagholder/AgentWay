@@ -1251,6 +1251,10 @@ fieldset {
   table-layout: fixed;
   border-collapse: collapse;
 }
+.handoff-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .work-table .work-title {
   width: 40%;
 }

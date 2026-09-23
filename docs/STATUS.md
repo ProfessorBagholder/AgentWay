@@ -21,7 +21,13 @@ The user completed the Muse → AgentWay → YouTube flow: Google consent, chann
 
 ## Not implemented
 
-Cross-agent execution or wake adapters, quota observation/admission, manager failover, additional publishing platforms and RSS. AgentWay does not generate or edit content. Public YouTube publishing remains subject to Google's project audit restrictions.
+Native agent wake adapters, file attachments for handoffs, quota observation/admission, manager failover, additional publishing platforms and RSS. AgentWay does not generate or edit content. Public YouTube publishing remains subject to Google's project audit restrictions.
+
+## Agent discovery and handoff (test branch)
+
+Owner-controlled directed grants let one connected agent discover a permitted recipient by stable connection ID. Authenticated HTTP and MCP tools create idempotent text tasks in that recipient's durable, paged inbox, with claim/renew/complete/fail/cancel transitions. A recipient-generated claim UUID makes lost claim responses safe to retry; leases fence late or stale results. Agents see only tasks they sent or received. Tasks in the owner UI show the sender, receiving agent, state, instructions and result; Activity log shows the correlated transitions. State changes and events commit in one SQLite transaction. The same operational table now uses Destination for both YouTube and agents.
+
+Delivery is pull-only: an agent must check its inbox and claim work. AgentWay does not yet register or invoke a native wake callback for Grok Bot, Muse or Codex. The user observed Grok Bot prompt Codex in an earlier test, but that existing client-to-client route has not been identified as an AgentWay mechanism. This branch does not claim a live Grok/Muse handoff, file transport, or automatic execution. Isolated two-credential HTTP checks and automated backend tests cover discovery, grants, retries, claims, cancellation and result readback; browser screenshots cover the new owner screens with isolated test data.
 
 ## Engineering audit and dependency proof
 

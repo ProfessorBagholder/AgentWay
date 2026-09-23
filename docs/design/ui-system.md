@@ -20,9 +20,9 @@ Theme is one native radio group styled as a segmented selector, with Light/sun a
 
 ## Operational lists
 
-Tasks and Activity log use the same WorkTable and WorkMetadata components in web/src/workspace.tsx. Same column widths, header treatment, padding, alignment, date formatting and badges. Columns: Task/Activity, Agent, Platform, Created, Status. The title is primary. Tasks navigate to work details/recovery; Activity expands one correlated operation into its steps. Use an explicit chevron button with aria-expanded/aria-controls. Never replace a whole list on a row update or fetch step history before expansion.
+Tasks and Activity log use the same WorkTable and WorkMetadata components in web/src/workspace.tsx. Same column widths, header treatment, padding, alignment, date formatting and badges. Columns: Task/Activity, Agent, Destination, Created, Status. Destination is the receiving service or agent; this accommodates both publishing and agent-to-agent work. The title is primary. Tasks navigate to work details/recovery; Activity expands one correlated operation into its steps. Use an explicit chevron button with aria-expanded/aria-controls. Never replace a whole list on a row update or fetch step history before expansion.
 
-Below 1000px, reflow each record into labelled fields; do not hide Agent, Platform, date, status or actions. Long titles wrap without pushing columns offscreen. Keep semantic table markup and column headers. Agent names must come from recorded attribution, never a guessed product or today's renamed connection. Historical missing attribution displays Not recorded; new uploads snapshot the authenticated connection name and persist its ID. A credential identifies a connection, not a unique process or conversation.
+Below 1000px, reflow each record into labelled fields; do not hide Agent, Destination, date, status or actions. Long titles wrap without pushing columns offscreen. Keep semantic table markup and column headers. Agent names must come from recorded attribution, never a guessed product or today's renamed connection. Historical missing attribution displays Not recorded; new uploads snapshot the authenticated connection name and persist its ID. A credential identifies a connection, not a unique process or conversation.
 
 ## Verification before presenting any UI change
 
