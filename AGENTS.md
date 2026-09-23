@@ -4,6 +4,7 @@
 
 - Work in `~/dev/AgentWay`. Do not use `~/Documents` for this project.
 - AgentWay connects users' existing agents to services and to one another. It does not host models or create content itself.
+- Cross-agent handoff is a product-wide capability, not a Codex-only shortcut. Authentication or an MCP tool call proves access to AgentWay, not unattended delivery to an agent's existing conversation. Before offering any connection as a handoff recipient, verify its actual receiver/wake path and the same task, acknowledgment, result, timeout and recovery behavior required of every supported product; see `docs/design/handoff-delivery-gate.md`. Never substitute a new model/API session, a one-off scheduled poll, or UI automation for the user's existing agent without explicitly changing the product contract.
 - Treat Muse, Grok Bot, ChatGPT agents, Claude agents and Codex as distinct products. Verify their actual connector capabilities; do not substitute one product or a model API for another. Codex is an explicit connection here, not evidence that ChatGPT agents can use the same setup.
 - Infer the narrowest coherent change from the request and existing behavior. Preserve unrelated screens, navigation, styling and behavior. Propose optional improvements separately.
 - Implement on a focused branch. Deliver a reviewable PR; do not merge without authorization.
