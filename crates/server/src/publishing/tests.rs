@@ -331,7 +331,10 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
         .json()
         .await
         .unwrap();
-    assert_eq!(status["agent_guidance"], guidance::payload());
+    assert_eq!(
+        status["agent_guidance"],
+        guidance::payload(MAX_MEDIA * 5, MAX_MEDIA)
+    );
     let required = status["agent_guidance"]["publish_schema"]["required"]
         .as_array()
         .unwrap();
@@ -371,6 +374,10 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
             .any(|t| t["name"] == "publish_youtube")
     );
     for name in [
+        "create_resumable_media_upload",
+        "get_media_upload",
+        "complete_media_upload",
+        "cancel_media_upload",
         "update_youtube_video",
         "get_youtube_settings_operation",
         "list_youtube_categories",
@@ -2358,3 +2365,6 @@ async fn thumbnail_initialization_sends_explicit_zero_length_and_preserves_rejec
     assert_eq!(writes.load(Ordering::SeqCst), 1);
     server.abort();
 }
+
+#[path = "transfer_tests.rs"]
+mod transfer_tests;

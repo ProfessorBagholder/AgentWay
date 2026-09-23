@@ -3,7 +3,14 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 const CHUNK: usize = 8 * 1024 * 1024;
 impl Publisher {
     pub(super) async fn worker(&self) {
+        let mut next_cleanup = std::time::Instant::now();
         loop {
+            if std::time::Instant::now() >= next_cleanup {
+                if let Err(error) = self.expire_uploads().await {
+                    tracing::warn!(%error,"Could not expire abandoned media uploads");
+                }
+                next_cleanup = std::time::Instant::now() + Duration::from_secs(300);
+            }
             if self.0.shutdown.is_cancelled() {
                 return;
             }
@@ -53,7 +60,7 @@ impl Publisher {
             .bind(&input.media_id)
             .fetch_one(&self.0.db)
             .await?;
-        let mut file = tokio::fs::File::open(self.0.dir.join("media").join(&media.id))
+        let mut file = tokio::fs::File::open(self.media_file(&media.id).await?)
             .await
             .map_err(|_| {
                 anyhow::anyhow!("Stored video is missing. Restore the media file before retrying.")

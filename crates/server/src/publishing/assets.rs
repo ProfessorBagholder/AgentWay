@@ -165,7 +165,7 @@ impl Publisher {
                 bail!("Thumbnail/caption maximum is 2 MiB");
             }
             mime = media.mime;
-            bytes = tokio::fs::read(self.0.dir.join("media").join(id)).await?;
+            bytes = tokio::fs::read(self.media_file(id).await?).await?;
             if bytes.len() != media.size as usize {
                 bail!("Media length changed");
             }

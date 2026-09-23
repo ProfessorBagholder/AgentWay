@@ -10,6 +10,7 @@ mod podcast;
 mod settings;
 #[cfg(test)]
 mod tests;
+mod transfers;
 mod vault;
 mod video;
 use video::{DeleteInput, VideoOperation, VisibilityInput};
@@ -33,9 +34,14 @@ struct Inner {
     dir: PathBuf,
     vault: vault::Vault,
     client: reqwest::Client,
+    tus_url: Option<String>,
+    tus_dir: PathBuf,
+    media_budget: i64,
+    max_video_bytes: i64,
     endpoints: Endpoints,
     wake: Notify,
     transfers: Semaphore,
+    media_locks: [Mutex<()>; 64],
     access_token: Mutex<Option<CachedToken>>,
     mutation: Mutex<()>,
     auth_failure_log: Mutex<Option<std::time::Instant>>,
@@ -198,12 +204,23 @@ impl Publisher {
             Arc::new(Inner {
                 db,
                 _lock: lock,
+                tus_dir: std::env::var("TUSD_DATA_DIR")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| dir.join("tus")),
+                tus_url: std::env::var("TUSD_URL").ok(),
+                media_budget: positive_limit(
+                    "MEDIA_RESERVATION_BYTES",
+                    MAX_MEDIA * 5,
+                    i64::MAX / 2,
+                )?,
+                max_video_bytes: positive_limit("MEDIA_MAX_VIDEO_BYTES", MAX_MEDIA, MAX_MEDIA)?,
                 dir,
                 vault,
                 client,
                 endpoints: Endpoints::default(),
                 wake: Notify::new(),
                 transfers: Semaphore::new(2),
+                media_locks: std::array::from_fn(|_| Mutex::new(())),
                 access_token: Mutex::new(None),
                 mutation: Mutex::new(()),
                 auth_failure_log: Mutex::new(None),
@@ -254,7 +271,7 @@ impl Publisher {
                 .await?;
         let manage_channel = self.setting("youtube_manage_channel").await?;
         Ok(
-            json!({"connection":self.workspace_connection().await?, "video_management_authorized": account.as_ref().is_some_and(|(id,_)| Some(id.as_str()) == manage_channel.as_deref()), "configured": self.setting("client_id").await?.is_some(), "account": account.map(|(id,name)| json!({"id":id,"name":name})), "private_only": self.setting("private_only").await?.as_deref() != Some("false"), "bridge_url":self.setting("bridge_url").await?.unwrap_or_default(), "agent_guidance":guidance::payload()}),
+            json!({"connection":self.workspace_connection().await?, "video_management_authorized": account.as_ref().is_some_and(|(id,_)| Some(id.as_str()) == manage_channel.as_deref()), "configured": self.setting("client_id").await?.is_some(), "account": account.map(|(id,name)| json!({"id":id,"name":name})), "private_only": self.setting("private_only").await?.as_deref() != Some("false"), "bridge_url":self.setting("bridge_url").await?.unwrap_or_default(), "agent_guidance":guidance::payload(self.0.media_budget,self.0.max_video_bytes)}),
         )
     }
     pub async fn activity(&self) -> Result<Option<BridgeActivity>> {
@@ -346,33 +363,18 @@ impl Publisher {
         self.emit("publication.upsert", value).await
     }
     pub async fn create_media(&self, input: MediaInput) -> Result<Value> {
-        if !(1..=MAX_MEDIA).contains(&input.size)
-            || ![
-                "video/mp4",
-                "video/quicktime",
-                "video/webm",
-                "image/png",
-                "image/jpeg",
-                "text/vtt",
-                "application/x-subrip",
-            ]
-            .contains(&input.mime.as_str())
-            || (!input.mime.starts_with("video/") && input.size > 2 * 1024 * 1024)
-        {
-            bail!(
-                "Provide video up to 2 GiB or PNG/JPEG artwork or timed UTF-8 SRT/WebVTT captions up to 2 MiB"
-            );
+        if input.mime.starts_with("video/") && input.size > self.0.max_video_bytes {
+            bail!("Media size exceeds configured video limit");
         }
+        validate_media(&input)?;
         self.check_publish_access().await?;
         let id = Uuid::new_v4().to_string();
         // Bound disk reservations, including unfinished transfers.
         let mut tx = self.0.db.begin().await?;
         let result = sqlx::query("INSERT INTO media(id,size,mime,agent_id) SELECT ?,?,?,? WHERE (SELECT COALESCE(SUM(size),0) FROM media)+?<=?")
-            .bind(&id).bind(input.size).bind(input.mime).bind(self.connection_id()).bind(input.size).bind(MAX_MEDIA * 5).execute(&mut *tx).await?;
+            .bind(&id).bind(input.size).bind(input.mime).bind(self.connection_id()).bind(input.size).bind(self.0.media_budget).execute(&mut *tx).await?;
         if result.rows_affected() == 0 {
-            bail!(
-                "Media storage limit reached (10 GiB). Remove unused media before uploading more."
-            );
+            bail!("Media storage limit reached. Remove unused media before uploading more.");
         }
         tx.commit().await?;
         Ok(
@@ -458,4 +460,37 @@ impl Publisher {
         self.0.wake.notify_one();
         self.publication(id).await
     }
+}
+
+fn validate_media(input: &MediaInput) -> Result<()> {
+    if !(1..=MAX_MEDIA).contains(&input.size)
+        || ![
+            "video/mp4",
+            "video/quicktime",
+            "video/webm",
+            "image/png",
+            "image/jpeg",
+            "text/vtt",
+            "application/x-subrip",
+        ]
+        .contains(&input.mime.as_str())
+        || (!input.mime.starts_with("video/") && input.size > 2 * 1024 * 1024)
+    {
+        bail!(
+            "Provide video up to 2 GiB or PNG/JPEG artwork or timed UTF-8 SRT/WebVTT captions up to 2 MiB"
+        );
+    }
+    Ok(())
+}
+
+fn positive_limit(name: &str, default: i64, maximum: i64) -> Result<i64> {
+    let value = std::env::var(name)
+        .ok()
+        .map(|s| s.parse::<i64>())
+        .transpose()?
+        .unwrap_or(default);
+    if value <= 0 || value > maximum {
+        bail!("Invalid {name}");
+    }
+    Ok(value)
 }

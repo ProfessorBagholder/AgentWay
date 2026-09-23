@@ -10,7 +10,7 @@ For a hosted agent such as Muse, `./run --share` additionally starts a temporary
 
 The app port defaults to 8787; the agent port defaults to 8788. Override with `--port` and `--bridge-port`. The management app is loopback-only. HTTP/MCP clients authenticate to the separate agent port using a bearer token. HTTPS must terminate at a trusted reverse proxy/tunnel for remote access. Browser-origin requests to the agent listener are rejected.
 
-Quick tunnels are for testing, have provider availability/body-size restrictions, and do not support long-lived SSE. AgentWay's HTTP API works without SSE; Muse should use that API for this test. Keep videos sent through a Cloudflare Free-plan proxy under 90 MiB until resumable receiving uploads are integrated. A named tunnel fixes hostname stability, not the per-request body limit; AgentWay's own file cap is 2 GiB and total reservation cap is 10 GiB. MCP over a normal HTTPS proxy supports Streamable HTTP, with stateless JSON responses for older and newer protocol versions; quick-tunnel MCP compatibility is not claimed.
+Quick tunnels are for testing, have provider availability/body-size restrictions, and do not support long-lived SSE. AgentWay's HTTP API works without SSE; Muse should use that API for this test. Use the resumable receiving path for video: authenticated tus chunks are at most 8 MiB, so a complete video need not fit in one proxy request. Legacy full-file PUT still requires the complete file to fit the ingress limit. A named tunnel fixes hostname stability, not the per-request body limit; AgentWay's own file cap is 2 GiB and total reservation cap is 10 GiB. MCP over a normal HTTPS proxy supports Streamable HTTP, with stateless JSON responses for older and newer protocol versions; quick-tunnel MCP compatibility is not claimed.
 
 ## Authorize YouTube
 
@@ -87,7 +87,7 @@ Use **Agents → your connection → Connection instructions → Copy instructio
 | Field | Required | Meaning / constraints |
 | --- | --- | --- |
 | request_id | Yes | UUID for one logical upload. Retried submissions use the same UUID and identical input. |
-| media_id | Yes | UUID returned by create_media_upload / POST /v1/media, with completed raw-byte PUT. |
+| media_id | Yes | Verified ready media from create_resumable_media_upload + complete_media_upload, or the legacy completed raw-byte PUT. |
 | title | Yes | Nonempty after trimming, at most 100 characters; no angle brackets. |
 | description | No | Defaults to empty; at most 5000 UTF-8 bytes, no angle brackets. |
 | privacy | No | private, unlisted or public; defaults to private. Owner policy may reject non-private. |
@@ -97,7 +97,7 @@ Use **Agents → your connection → Connection instructions → Copy instructio
 
 YouTube's disclosure guidance distinguishes realistic altered/synthetic content from production assistance such as script drafting. The creating agent determines the appropriate declaration from the content and owner instructions; the bridge transports it. If the agent cannot determine a required declaration, resolve that before submission. See [YouTube guidance](https://support.google.com/youtube/answer/14328491).
 
-**Video settings:** optional `settings` supports category, tags, metadata/audio language, scheduling, license, embedding, public statistics, paid product placement, recording date and translations. Category defaults to legacy Entertainment (24) only when omitted; agents should choose an assignable category explicitly. Notifications default to on. HTTP/MCP also exposes metadata updates, thumbnails and timed captions. See [coverage, endpoints and recovery semantics](youtube-video-settings.md) and the schemas returned by guidance version 12. These new mutations are on the test branch and require live verification. Unknown input fields are rejected; a required unsupported setting is a capability gap, not permission to silently omit it.
+**Video settings:** optional `settings` supports category, tags, metadata/audio language, scheduling, license, embedding, public statistics, paid product placement, recording date and translations. Category defaults to legacy Entertainment (24) only when omitted; agents should choose an assignable category explicitly. Notifications default to on. HTTP/MCP also exposes metadata updates, thumbnails and timed captions. See [coverage, endpoints and recovery semantics](youtube-video-settings.md) and the schemas returned by guidance version 14. These new mutations are on the test branch and require live verification. Unknown input fields are rejected; a required unsupported setting is a capability gap, not permission to silently omit it.
 
 The worker sends audience and synthetic declarations with the initial upload metadata, together with requested visibility. Completion/readback currently verifies visibility only. Do not tell users that declarations were independently read back, processing finished, or Shorts classification was confirmed.
 
@@ -232,3 +232,5 @@ Cover uploads use Google's resumable protocol with an encrypted, durable session
 Available MCP tools: `youtube_status`, `create_media_upload`, `publish_youtube`, `list_publications`, `get_publication`, `retry_publication`, `get_youtube_video`, `set_youtube_visibility`, `get_video_operation`, `list_video_operations`, `delete_replaced_youtube_video`, `get_youtube_channel`, `set_youtube_channel_description`, `list_youtube_playlists`, `manage_youtube_podcast`, `get_youtube_podcast_operation`. Schemas come from tools/list; current settings and limits come from agent_guidance. Drafts, scheduled publishing, dry-run provider validation and additional social platforms are not implemented.
 
 Official Grok Bot documentation describes account-wide plugins and a shared cloud computer: https://docs.x.ai/grok-bot/computer-and-apps. An AgentWay credential separates it from Muse, but cannot distinguish individual Bots that share that credential.
+
+Resumable receiving endpoints, durability guarantees, limits and retry behavior: [resumable media](resumable-media.md). A runnable standard-library client is in [examples/resumable-upload.py](examples/resumable-upload.py).
