@@ -2,6 +2,8 @@
 
 Status: design and integration proof, 2026-09-23. The current feature branch is **not** a complete cross-agent handoff release.
 
+See [prior-art research](handoff-prior-art.md) for existing delivery, protocol and durable-execution systems and their limits for AgentWay.
+
 ## Product contract
 
 Every agent offered as a handoff recipient must have the same observable behavior: AgentWay accepts an authorized task, the intended agent receives it without the user relaying it, acknowledges or rejects it, and reports a result or actionable failure. Internal delivery mechanisms may differ, but the task states, timeout policy, audit trail, and recovery must not. A connected MCP credential proves that an agent can call AgentWay; it does not prove AgentWay can start a turn in that agent.
