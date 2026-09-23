@@ -137,7 +137,7 @@ fn checksum(data: &[u8]) -> String {
 }
 
 #[tokio::test]
-async fn resumable_retry_restart_suffix_recovery_and_finalization_are_durable() {
+async fn resumable_retry_restart_and_finalization_are_durable() {
     let (dir, p) = fixture().await;
     let args = reservation(b"abcdefgh");
     let upload = p.create_resumable_upload(args.clone()).await.unwrap();

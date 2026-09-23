@@ -398,8 +398,8 @@ impl Publisher {
             .transfers
             .try_acquire()
             .map_err(|_| error(429, "transfers_busy", None))?;
-        // Lock through body receive, disk sync and offset commit. A request cancelled
-        // while writing can leave an uncommitted suffix; the next writer truncates it.
+        // Serialize validation and forwarding with finalization/deletion. After
+        // an uncertain transport response, recover progress through tusd HEAD.
         let _guard = self.media_lock(id).await?;
         let mut upload = self.upload_record(id).await?;
         upload.active()?;
