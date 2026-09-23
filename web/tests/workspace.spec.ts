@@ -471,3 +471,76 @@ test("connection screens retain alignment and controls across sizes and themes",
     }
   }
 });
+
+test("submitted video settings retain all fields across sizes and themes", async ({
+  page,
+}, testInfo) => {
+  await page.route("**/api/publications/upload", (r) =>
+    r.fulfill({
+      json: {
+        publication,
+        channel_id: "channel",
+        settings: {
+          privacy: "private",
+          made_for_kids: false,
+          contains_synthetic_media: true,
+          description: "Original upload description",
+          notify_subscribers: false,
+          settings: {
+            category_id: "27",
+            tags: ["software engineering", "podcast"],
+            default_language: "en-CA",
+            default_audio_language: "en",
+            publish_at: "2099-01-01T18:00:00Z",
+            license: "creativeCommon",
+            embeddable: false,
+            public_stats_viewable: true,
+            paid_product_placement: false,
+            recording_date: "2026-09-22T00:00:00Z",
+            localizations: {
+              fr: { title: "Titre", description: "Description française" },
+            },
+          },
+        },
+      },
+    }),
+  );
+  for (const theme of ["dark", "light"]) {
+    await page.goto("/#/settings");
+    await page
+      .getByRole("radio", {
+        name: theme === "dark" ? "Dark" : "Light",
+        exact: true,
+      })
+      .check();
+    for (const width of [1440, 900, 390]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await page.goto("/#/tasks/upload");
+      await expect(
+        page.getByRole("heading", { name: "Submitted video settings" }),
+      ).toBeVisible();
+      for (const label of [
+        "Category",
+        "Subscriber notifications",
+        "Scheduled publication",
+        "Audio language",
+        "Paid promotion",
+        "Translation (French)",
+      ]) {
+        await expect(page.getByText(label, { exact: true })).toBeVisible();
+      }
+      await expect(
+        page.getByText("software engineering, podcast", { exact: true }),
+      ).toBeVisible();
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth > innerWidth,
+        ),
+      ).toBe(false);
+      await page.screenshot({
+        path: testInfo.outputPath(`${theme}-${width}-video-settings.png`),
+        fullPage: true,
+      });
+    }
+  }
+});

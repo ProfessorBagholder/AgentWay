@@ -38,7 +38,7 @@ impl Publisher {
             video.ok_or_else(|| anyhow::anyhow!("Publication has no YouTube video ID"))?,
         ))
     }
-    async fn owned_video(&self, id: &str) -> Result<(String, Value)> {
+    pub(super) async fn owned_video(&self, id: &str) -> Result<(String, Value)> {
         let (token, item) = self.lookup_owned_video(id).await?;
         Ok((
             token,
@@ -54,7 +54,7 @@ impl Publisher {
             .get(&self.0.endpoints.videos)
             .timeout(Duration::from_secs(20))
             .query(&[
-                ("part", "snippet,status,processingDetails,contentDetails"),
+                ("part", "snippet,status,processingDetails,contentDetails,localizations,recordingDetails,paidProductPlacementDetails"),
                 ("id", video.as_str()),
             ])
             .bearer_auth(&token)
@@ -138,6 +138,7 @@ impl Publisher {
         {
             bail!("The owner's private-only policy prevents this visibility change");
         }
+        self.check_pending_settings(id).await?;
         let (channel, _) = self.video_target(id).await?;
         if self.setting("youtube_manage_channel").await?.as_deref() != Some(channel.as_str()) {
             bail!(
@@ -272,7 +273,7 @@ fn processed(item: &Value) -> bool {
         && item["status"]["uploadStatus"] == "processed"
 }
 fn video_projection(id: &str, item: &Value) -> Value {
-    json!({"publication_id":id,"video_id":item["id"],"actual_privacy":item["status"]["privacyStatus"],
+    json!({"contains_synthetic_media":item["status"]["containsSyntheticMedia"],"etag":item["etag"],"snippet":item["snippet"],"status":item["status"],"localizations":item["localizations"],"recordingDetails":item["recordingDetails"],"paidProductPlacementDetails":item["paidProductPlacementDetails"],"publication_id":id,"video_id":item["id"],"actual_privacy":item["status"]["privacyStatus"],
         "upload_status":item["status"]["uploadStatus"],"processing_status":item["processingDetails"]["processingStatus"],
         "processing_failure_reason":item["processingDetails"]["processingFailureReason"],
         "rejection_reason":item["status"]["rejectionReason"],"failure_reason":item["status"]["failureReason"],
@@ -329,6 +330,7 @@ impl Publisher {
                 );
             }
         }
+        self.check_pending_settings(id).await?;
         let (channel, _) = self.video_target(id).await?;
         if self.setting("youtube_manage_channel").await?.as_deref() != Some(channel.as_str()) {
             bail!("Video-management permission is required; authorize YouTube in AgentWay");
@@ -431,5 +433,24 @@ impl Publisher {
         Ok(
             json!({"publication_id":id,"replacement_id":input.replacement_id,"deleted":true,"verification":"youtube_204"}),
         )
+    }
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+    #[test]
+    fn synthetic_disclosure_readback_retains_true_false_and_unknown() {
+        for actual in [json!(true), json!(false), Value::Null] {
+            let item = if actual.is_null() {
+                json!({"status":{}})
+            } else {
+                json!({"status":{"containsSyntheticMedia":actual}})
+            };
+            assert_eq!(
+                video_projection("p", &item)["contains_synthetic_media"],
+                actual
+            );
+        }
     }
 }

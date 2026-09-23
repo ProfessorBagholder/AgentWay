@@ -33,6 +33,90 @@ pub struct DeleteRequest {
 }
 #[tool_router]
 impl PublishingTools {
+    #[tool(
+        description = "Update an existing video's metadata/settings without reuploading. Read get_youtube_video first and supply its exact etag. Omitted fields are preserved; settings.localizations replaces the complete translation map. Stable request_id and identical retries only reconcile once a write was attempted. completed means verified, verification_pending means accepted, outcome_unknown means uncertain: never send a new UUID to bypass uncertainty. Scheduling requires an unpublished private video and user authorization; clear_schedule cancels it. Existing video-management consent required."
+    )]
+    async fn update_youtube_video(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<settings::VideoUpdate>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .update_video_settings(input)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Read the saved outcome of a video settings operation by request_id. To reconcile a pending operation, retry update_youtube_video with its original arguments; this only reads, never rewrites."
+    )]
+    async fn get_youtube_settings_operation(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<UploadId>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .settings_operation(&input.id)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "List assignable YouTube video categories for a region. Use returned IDs for settings.category_id; do not infer a category from the agent's identity."
+    )]
+    async fn list_youtube_categories(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<assets::CategoryQuery>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .youtube_categories(input)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Read caption tracks and their processing status for an AgentWay publication. serving means processed; failed includes failureReason. Use caption IDs for replacement/deletion."
+    )]
+    async fn list_youtube_captions(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<UploadId>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .youtube_captions(&input.id)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Set a custom video thumbnail, create/replace timed captions, or delete a caption track as authorized by the user. Reserve and PUT media first (PNG/JPEG or UTF-8 SRT/WebVTT, 2 MiB max). Reuse request_id and identical arguments on retry. upload_pending requires a same-ID retry after five seconds to query/resume its persisted session, including after restart. accepted acknowledges the write; poll captions for serving/failed. outcome_unknown never permits a blind duplicate write. Existing management consent required. For caption replacement supply caption_id and is_draft; language/name are preserved."
+    )]
+    async fn manage_youtube_video_asset(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<assets::VideoAssetInput>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .manage_video_asset(input)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Read the durable result of a thumbnail/caption operation by request UUID. Unknown outcomes require provider inspection, not a new request ID."
+    )]
+    async fn get_youtube_asset_operation(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<UploadId>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .video_asset_operation(&input.id)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
     fn new(_publisher: Publisher) -> Self {
         Self {
             tool_router: Self::tool_router(),
@@ -212,7 +296,7 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "Reserve video or podcast-cover media storage. Returns an authenticated HTTP PUT path for raw file bytes. Transfer the file from your own environment; do not pass a local filesystem path or base64 through MCP."
+        description = "Reserve video, PNG/JPEG artwork, or timed UTF-8 SRT/WebVTT caption storage. Returns an authenticated HTTP PUT path for raw file bytes. Transfer the file from your own environment; do not pass a local filesystem path or base64 through MCP."
     )]
     async fn create_media_upload(
         &self,
@@ -226,7 +310,7 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "Upload finished media to the connected YouTube channel. Requires a completed media PUT. Returns a persisted job; use get_publication until uploaded or interrupted. Reuse request_id on retries. A video_url confirms upload only. Use get_publication and confirm actual_privacy matches requested_privacy before claiming the requested visibility. YouTube still processes uploaded videos, and determines Shorts classification. Explicit made_for_kids and contains_synthetic_media booleans are required. Current category is Entertainment (24); subscriber notifications default to on; set notify_subscribers=false to disable them. Only schema fields are supported; report any required unsupported setting before uploading. Disclosure readback and metadata edits are not implemented."
+        description = "Upload finished media to the connected YouTube channel. Requires a completed media PUT. Returns a persisted job; use get_publication until uploaded or interrupted. Reuse request_id on retries. A video_url confirms upload only. Use get_publication and confirm actual_privacy matches requested_privacy before claiming the requested visibility. YouTube still processes uploaded videos, and determines Shorts classification. Explicit made_for_kids and contains_synthetic_media booleans are required. Optional settings support category, tags, languages, scheduled publication, embedding, license, public statistics, paid product placement, recording date and localized titles/descriptions. Omitted category retains legacy Entertainment (24); choose category explicitly. subscriber notifications default to on; set notify_subscribers=false to disable them. Only schema fields are supported; report any required unsupported setting before uploading. Read get_youtube_video for metadata/disclosure readback and etag; use update_youtube_video for edits."
     )]
     async fn publish_youtube(
         &self,

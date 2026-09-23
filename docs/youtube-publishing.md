@@ -50,7 +50,7 @@ A single worker streams 8 MiB chunks to YouTube. The session is encrypted and pe
 
 ## Verified versus pending
 
-Automated tests cover auth boundaries, incomplete media, policy enforcement, concurrent idempotent submissions, OAuth state binding/replay, MCP discovery/tool invocation, and recovery after a lost final response using a simulated YouTube server. Google consent and channel discovery have now succeeded against the user's real account. A browser return-navigation defect found during that test was fixed with backend and browser regression coverage. The user subsequently confirmed Muse connectivity and a real video upload, with playback and Private visibility shown in YouTube. Google project audit approval and a live agent test over MCP remain unverified.
+Automated tests cover auth boundaries, incomplete media, policy enforcement, concurrent idempotent submissions, OAuth state binding/replay, MCP discovery/tool invocation, and recovery after a lost final response using a simulated YouTube server. Google consent and channel discovery have now succeeded against the user's real account. A browser return-navigation defect found during that test was fixed with backend and browser regression coverage. The user subsequently confirmed Muse connectivity and a real video upload, with playback and Private visibility shown in YouTube. The user also confirmed public Muse uploads and a playable private Grok Bot upload via MCP.
 
 ## References
 
@@ -97,7 +97,7 @@ Use **Agents → your connection → Connection instructions → Copy instructio
 
 YouTube's disclosure guidance distinguishes realistic altered/synthetic content from production assistance such as script drafting. The creating agent determines the appropriate declaration from the content and owner instructions; the bridge transports it. If the agent cannot determine a required declaration, resolve that before submission. See [YouTube guidance](https://support.google.com/youtube/answer/14328491).
 
-**Current limits:** these are the only supported publish fields. Category is fixed to Entertainment (24); subscriber notifications default to on unless explicitly disabled. No tags, publication scheduling, paid-promotion control, language setting, thumbnail/caption upload, playlist association or metadata editing is exposed yet. Unknown input fields are rejected. A required unsupported setting is a pre-upload capability gap, not permission to omit it. The design specification describes future support, not current functionality.
+**Video settings:** optional `settings` supports category, tags, metadata/audio language, scheduling, license, embedding, public statistics, paid product placement, recording date and translations. Category defaults to legacy Entertainment (24) only when omitted; agents should choose an assignable category explicitly. Notifications default to on. HTTP/MCP also exposes metadata updates, thumbnails and timed captions. See [coverage, endpoints and recovery semantics](youtube-video-settings.md) and the schemas returned by guidance version 12. These new mutations are on the test branch and require live verification. Unknown input fields are rejected; a required unsupported setting is a capability gap, not permission to silently omit it.
 
 The worker sends audience and synthetic declarations with the initial upload metadata, together with requested visibility. Completion/readback currently verifies visibility only. Do not tell users that declarations were independently read back, processing finished, or Shorts classification was confirmed.
 

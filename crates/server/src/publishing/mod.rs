@@ -1,11 +1,13 @@
 mod channel;
 mod connections;
 use channel::ChannelDescriptionInput;
+mod assets;
 mod guidance;
 mod http;
 mod mcp;
 mod oauth;
 mod podcast;
+mod settings;
 #[cfg(test)]
 mod tests;
 mod vault;
@@ -46,6 +48,10 @@ struct CachedToken {
 }
 #[derive(Clone)]
 struct Endpoints {
+    categories: String,
+    captions: String,
+    caption_upload: String,
+    thumbnails: String,
     token: String,
     channels: String,
     upload: String,
@@ -58,6 +64,10 @@ struct Endpoints {
 impl Default for Endpoints {
     fn default() -> Self {
         Self {
+            categories: "https://www.googleapis.com/youtube/v3/videoCategories".into(),
+            captions: "https://www.googleapis.com/youtube/v3/captions".into(),
+            caption_upload: "https://www.googleapis.com/upload/youtube/v3/captions".into(),
+            thumbnails: "https://www.googleapis.com/upload/youtube/v3/thumbnails/set".into(),
             token: "https://oauth2.googleapis.com/token".into(),
             channels: "https://www.googleapis.com/youtube/v3/channels".into(),
             upload: "https://www.googleapis.com/upload/youtube/v3/videos".into(),
@@ -122,6 +132,9 @@ pub struct PublishInput {
     /// Notify subscribers about this upload. Defaults to true; set false to disable.
     #[serde(default = "notifications_enabled")]
     pub notify_subscribers: bool,
+    /// Optional YouTube settings. Omitted fields retain legacy upload defaults.
+    #[serde(default)]
+    pub settings: settings::VideoSettings,
 }
 impl PublishInput {
     fn from_saved(input: &str) -> Result<Self> {
@@ -146,7 +159,7 @@ fn private() -> String {
 pub struct MediaInput {
     /// Exact byte length; maximum 2 GiB in this version.
     pub size: i64,
-    /// Video: video/mp4, video/quicktime, video/webm (2 GiB). Podcast cover: image/png or image/jpeg (2 MiB).
+    /// Video: video/mp4, video/quicktime, video/webm (2 GiB). Artwork: image/png or image/jpeg. Timed captions: text/vtt or application/x-subrip. Artwork/captions: 2 MiB.
     pub mime: String,
 }
 #[derive(FromRow)]
@@ -340,11 +353,15 @@ impl Publisher {
                 "video/webm",
                 "image/png",
                 "image/jpeg",
+                "text/vtt",
+                "application/x-subrip",
             ]
             .contains(&input.mime.as_str())
-            || (input.mime.starts_with("image/") && input.size > 2 * 1024 * 1024)
+            || (!input.mime.starts_with("video/") && input.size > 2 * 1024 * 1024)
         {
-            bail!("Provide video up to 2 GiB or a PNG/JPEG podcast cover up to 2 MiB");
+            bail!(
+                "Provide video up to 2 GiB or PNG/JPEG artwork or timed UTF-8 SRT/WebVTT captions up to 2 MiB"
+            );
         }
         self.check_publish_access().await?;
         let id = Uuid::new_v4().to_string();
@@ -399,7 +416,8 @@ impl Publisher {
             }
             return self.publication(&id).await;
         }
-        if input.privacy != "private"
+        input.settings.validate(&input.privacy, true)?;
+        if (input.privacy != "private" || input.settings.publish_at.is_some())
             && self.setting("private_only").await?.as_deref() != Some("false")
         {
             bail!("The owner has enabled private-only uploads in Publishing");
