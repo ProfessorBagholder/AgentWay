@@ -40,6 +40,45 @@ impl PublishingTools {
         }
     }
     #[tool(
+        description = "List the connected channel's playlists and podcastStatus, or supply playlist_id to read that playlist and its episodes. Follow nextPageToken with page_token. Before podcast setup, ask whether the user wants their full episodes organized as a YouTube podcast unless they already decided. Reuse existing playlists/videos; keep promotional shorts separate."
+    )]
+    async fn list_youtube_playlists(
+        &self,
+        Parameters(input): Parameters<podcast::PlaylistQuery>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher
+            .youtube_playlists(input)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Manage a YouTube podcast using action=create_playlist, set_cover, enable_podcast or add_episode. First obtain the user's podcast preference and show details. Create or select their playlist, add the selected full episodes (allowed before podcast designation), upload a square PNG/JPEG cover (at most 2 MiB) via create_media_upload and HTTP PUT, set_cover with media_id, then enable_podcast. Add full episodes by existing YouTube video_id without reupload. Uses existing management consent. Reuse request_id and identical arguments on retries. Inspect status: completed means YouTube acknowledged the operation; rejected means no success; outcome_unknown requires read-only reconciliation, never a fresh duplicate write. Exception: retry set_cover with identical inputs and the SAME request_id to recover legacy unknown covers or upload_pending results via its persisted resumable session. Does not guarantee YouTube Music eligibility."
+    )]
+    async fn manage_youtube_podcast(
+        &self,
+        Parameters(input): Parameters<podcast::PodcastInput>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher
+            .manage_podcast(input)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Read a saved podcast operation by request UUID after interruption. Outcome_unknown requires listing playlists/episodes to reconcile; never blindly repeat the write with a new UUID."
+    )]
+    async fn get_youtube_podcast_operation(
+        &self,
+        Parameters(input): Parameters<UploadId>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher
+            .podcast_operation(&input.id)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
         description = "Read the connected YouTube channel ID, title and current channel description before editing it."
     )]
     async fn get_youtube_channel(&self) -> Result<rmcp::Json<Value>, String> {
@@ -149,7 +188,7 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "Reserve media storage. Returns an authenticated HTTP PUT path for raw video bytes. Transfer the file from your own environment; do not pass a local filesystem path or base64 through MCP."
+        description = "Reserve video or podcast-cover media storage. Returns an authenticated HTTP PUT path for raw file bytes. Transfer the file from your own environment; do not pass a local filesystem path or base64 through MCP."
     )]
     async fn create_media_upload(
         &self,

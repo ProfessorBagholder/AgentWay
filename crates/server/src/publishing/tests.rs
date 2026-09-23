@@ -242,6 +242,7 @@ async fn restart_recovers_lost_final_response_without_duplicate_upload() {
         channels: format!("{base}/channels"),
         upload: format!("{base}/upload/youtube/v3/videos"),
         videos: format!("{base}/videos"),
+        ..Endpoints::default()
     };
     account(&p).await;
     let job = p.enqueue(input(media(&p).await)).await.unwrap();
@@ -274,6 +275,7 @@ async fn restart_recovers_lost_final_response_without_duplicate_upload() {
         channels: format!("{base}/channels"),
         upload: format!("{base}/upload/youtube/v3/videos"),
         videos: format!("{base}/videos"),
+        ..Endpoints::default()
     };
     p.retry(&job.id).await.unwrap();
     let worker = p.start_worker();
@@ -374,6 +376,9 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
             .any(|t| t["name"] == "publish_youtube")
     );
     for name in [
+        "list_youtube_playlists",
+        "manage_youtube_podcast",
+        "get_youtube_podcast_operation",
         "get_youtube_channel",
         "set_youtube_channel_description",
         "delete_replaced_youtube_video",
@@ -1457,4 +1462,333 @@ async fn publication_keeps_submitting_connection_name() {
             .as_deref(),
         Some("Muse")
     );
+}
+
+#[tokio::test]
+async fn podcasts_preserve_settings_and_never_repeat_ambiguous_inserts() {
+    use axum::{extract::Query, routing::get};
+    use std::collections::HashMap;
+    let (dir, mut p) = fixture().await;
+    let writes = Arc::new(AtomicUsize::new(0));
+    let counter = writes.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let mock = Router::new()
+        .route("/token", post(|| async { Json(json!({"access_token":"access","token_type":"Bearer","expires_in":3600})) }))
+        .route("/playlists", get(|Query(q): Query<HashMap<String,String>>| async move {
+            let id = q.get("id").map(String::as_str).unwrap_or("show");
+            Json(json!({"items":[{"id":id,"snippet":{"channelId":if id=="foreign" {"other"} else {"channel"},"title":"Existing show","description":"Keep this description","defaultLanguage":"en"},"status":{"privacyStatus":"unlisted","podcastStatus":if id=="enabled" {"enabled"} else {"unspecified"}}}],"nextPageToken":"next-page"}))
+        }).post(move || { let c=counter.clone(); async move {c.fetch_add(1,Ordering::SeqCst); StatusCode::BAD_GATEWAY} })
+          .put(|Query(query):Query<HashMap<String,String>>, Json(body):Json<Value>| async move {
+              assert_eq!(query["part"], "snippet,status");
+              assert_eq!(body["snippet"],json!({"title":"Existing show","description":"Keep this description","defaultLanguage":"en"}));
+              assert_eq!(body["status"]["privacyStatus"],"unlisted");
+              assert_eq!(body["status"]["podcastStatus"],"enabled");
+              Json(body)
+          }))
+        .route("/videos",get(|| async {Json(json!({"items":[{"id":"video","snippet":{"channelId":"channel"}}]}))}))
+        .route("/items",get(|| async {Json(json!({"items":[{"id":"membership","snippet":{"resourceId":{"videoId":"video"}}}]}))}));
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    fn endpoints(base: &str) -> Endpoints {
+        Endpoints {
+            token: format!("{base}/token"),
+            playlists: format!("{base}/playlists"),
+            playlist_items: format!("{base}/items"),
+            videos: format!("{base}/videos"),
+            ..Endpoints::default()
+        }
+    }
+    Arc::get_mut(&mut p.0).unwrap().endpoints = endpoints(&base);
+    account(&p).await;
+    p.set("youtube_manage_channel", "channel").await.unwrap();
+    let create = json!({"request_id":Uuid::new_v4().to_string(),"channel_id":"channel","action":"create_playlist","title":"Show","description":"Episodes","privacy":"private"});
+    // Exercise flattened request parsing and HTTP 202 for uncertain writes.
+    let (status, result) = call(
+        &p,
+        "POST",
+        "/v1/youtube/podcasts",
+        serde_json::to_vec(&create).unwrap(),
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(result["status"], "outcome_unknown");
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
+    p.0.db.close().await;
+    drop(p);
+    let db = crate::database(&format!(
+        "sqlite://{}",
+        dir.path().join("test.db").display()
+    ))
+    .await
+    .unwrap();
+    let mut p = Publisher::new(db, dir.path().join("publishing"), CancellationToken::new())
+        .await
+        .unwrap();
+    Arc::get_mut(&mut p.0).unwrap().endpoints = endpoints(&base);
+    let (_, replayed) = call(
+        &p,
+        "POST",
+        "/v1/youtube/podcasts",
+        serde_json::to_vec(&create).unwrap(),
+        true,
+    )
+    .await;
+    assert_eq!(replayed, result);
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
+    let mut conflict = create.clone();
+    conflict["title"] = json!("Different");
+    assert_eq!(
+        call(
+            &p,
+            "POST",
+            "/v1/youtube/podcasts",
+            serde_json::to_vec(&conflict).unwrap(),
+            true
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let input = |action: &str, playlist: &str| json!({"request_id":Uuid::new_v4().to_string(),"channel_id":"channel","action":action,"playlist_id":playlist});
+    let enabled = p
+        .manage_podcast(serde_json::from_value(input("enable_podcast", "show")).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(enabled["status"], "completed");
+    assert!(
+        p.manage_podcast(serde_json::from_value(input("enable_podcast", "foreign")).unwrap())
+            .await
+            .is_err()
+    );
+    let mut add = input("add_episode", "show");
+    add["video_id"] = json!("video");
+    add["full_episode"] = json!(true);
+    let added = p
+        .manage_podcast(serde_json::from_value(add.clone()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(added["already_present"], true);
+    add["request_id"] = json!(Uuid::new_v4().to_string());
+    add["full_episode"] = json!(false);
+    assert!(
+        p.manage_podcast(serde_json::from_value(add).unwrap())
+            .await
+            .is_err()
+    );
+    let listed = p
+        .youtube_playlists(podcast::PlaylistQuery {
+            playlist_id: None,
+            page_token: Some("page".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(listed["nextPageToken"], "next-page");
+    assert_eq!(
+        call(&p, "GET", "/v1/youtube/playlists", vec![], false)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn podcast_cover_is_validated_and_cannot_be_published_as_video() {
+    use axum::routing::get;
+    let (dir, mut p) = fixture().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let received = Arc::new(AtomicUsize::new(0));
+    let uploaded = received.clone();
+    let sessions = Arc::new(AtomicUsize::new(0));
+    let initiated = sessions.clone();
+    let checked = sessions.clone();
+    let session_url = format!("{base}/upload?upload_id=secret-session");
+    let mock = Router::new()
+        .route(
+            "/token",
+            post(|| async {
+                Json(json!({"access_token":"access","token_type":"Bearer","expires_in":3600}))
+            }),
+        )
+        .route(
+            "/playlists",
+            get(|| async {
+                Json(json!({"items":[{"id":"show","snippet":{"channelId":"channel"}}]}))
+            }),
+        )
+        .route(
+            "/images",
+            get(|| async { Json(json!({"kind":"youtube#playlistImageListResponse"})) }),
+        )
+        .route(
+            "/upload",
+            post(
+                move |headers: axum::http::HeaderMap, Json(body): Json<Value>| {
+                    let url = session_url.clone();
+                    initiated.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        assert_eq!(body["snippet"]["type"], "hero");
+                        assert!(body["snippet"].get("width").is_none());
+                        assert!(body["snippet"].get("height").is_none());
+                        assert_eq!(body["snippet"]["playlistId"], "show");
+                        assert_eq!(headers["x-upload-content-type"], "image/png");
+                        (StatusCode::OK, [("location", url)])
+                    }
+                },
+            )
+            .put(
+                move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
+                    let received = uploaded.clone();
+                    let sessions = checked.clone();
+                    async move {
+                        if headers["content-range"]
+                            .to_str()
+                            .unwrap()
+                            .starts_with("bytes */")
+                        {
+                            if sessions.load(Ordering::SeqCst) == 1 {
+                                return StatusCode::GONE.into_response();
+                            }
+                            if received.load(Ordering::SeqCst) == 0 {
+                                return StatusCode::PERMANENT_REDIRECT.into_response();
+                            }
+                            return Json(
+                                json!({"id":"cover","snippet":{"playlistId":"show","type":"hero"}}),
+                            )
+                            .into_response();
+                        }
+                        assert!(!body.is_empty());
+                        received.fetch_add(1, Ordering::SeqCst);
+                        // Simulate an applied upload whose completion response was lost.
+                        StatusCode::BAD_GATEWAY.into_response()
+                    }
+                },
+            ),
+        );
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    Arc::get_mut(&mut p.0).unwrap().endpoints = Endpoints {
+        token: format!("{base}/token"),
+        playlists: format!("{base}/playlists"),
+        playlist_images: format!("{base}/images"),
+        playlist_images_upload: format!("{base}/upload"),
+        ..Endpoints::default()
+    };
+    account(&p).await;
+    p.set("youtube_manage_channel", "channel").await.unwrap();
+    assert!(
+        p.create_media(MediaInput {
+            size: 2 * 1024 * 1024 + 1,
+            mime: "image/png".into()
+        })
+        .await
+        .is_err()
+    );
+    for (width, height) in [(2, 1), (2, 2)] {
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgb8(width, height)
+            .write_to(&mut cursor, image::ImageFormat::Png)
+            .unwrap();
+        let bytes = cursor.into_inner();
+        let reserved = p
+            .create_media(MediaInput {
+                size: bytes.len() as i64,
+                mime: "image/png".into(),
+            })
+            .await
+            .unwrap();
+        let media_id = reserved["media_id"].as_str().unwrap();
+        assert_eq!(
+            call(
+                &p,
+                "PUT",
+                reserved["upload_path"].as_str().unwrap(),
+                bytes,
+                true
+            )
+            .await
+            .0,
+            StatusCode::OK
+        );
+        assert!(p.enqueue(input(media_id.into())).await.is_err());
+        let request: podcast::PodcastInput=serde_json::from_value(json!({"request_id":Uuid::new_v4().to_string(),"channel_id":"channel","action":"set_cover","playlist_id":"show","media_id":media_id})).unwrap();
+        if width == height {
+            // Upgrade a legacy multipart operation that has no saved upload session.
+            sqlx::query("INSERT INTO podcast_operations(request_id,channel_id,input,result) VALUES(?,?,?,?)")
+                .bind(&request.request_id).bind("channel").bind(serde_json::to_string(&request).unwrap())
+                .bind(r#"{"status":"outcome_unknown"}"#).execute(&p.0.db).await.unwrap();
+        }
+        let result = p.manage_podcast(request.clone()).await;
+        if width == height {
+            let expired = result.unwrap();
+            assert_eq!(expired["status"], "upload_pending");
+            assert_eq!(expired["http_status"], 410);
+            assert_eq!(expired["error"], "upload_session_expired");
+            assert_eq!(received.load(Ordering::SeqCst), 0);
+            let pending = p.manage_podcast(request.clone()).await.unwrap();
+            assert_eq!(pending["status"], "upload_pending");
+            assert_eq!(pending["http_status"], 502);
+            assert!(!pending.to_string().contains("secret-session"));
+            let endpoints = p.0.endpoints.clone();
+            p.0.db.close().await;
+            drop(p);
+            let db = crate::database(&format!(
+                "sqlite://{}",
+                dir.path().join("test.db").display()
+            ))
+            .await
+            .unwrap();
+            p = Publisher::new(db, dir.path().join("publishing"), CancellationToken::new())
+                .await
+                .unwrap();
+            Arc::get_mut(&mut p.0).unwrap().endpoints = endpoints;
+            assert_eq!(
+                p.manage_podcast(request).await.unwrap()["status"],
+                "completed"
+            );
+            assert_eq!(received.load(Ordering::SeqCst), 1);
+            assert_eq!(sessions.load(Ordering::SeqCst), 2);
+        } else {
+            assert!(result.unwrap_err().to_string().contains("square"));
+        }
+    }
+    server.abort();
+}
+
+#[tokio::test]
+async fn full_episode_can_be_inserted_into_an_ordinary_empty_playlist() {
+    use axum::routing::get;
+    let (_dir, mut p) = fixture().await;
+    let writes = Arc::new(AtomicUsize::new(0));
+    let counter = writes.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let mock = Router::new()
+        .route("/token", post(|| async { Json(json!({"access_token":"access","token_type":"Bearer","expires_in":3600})) }))
+        .route("/playlists", get(|| async { Json(json!({"items":[{"id":"show","snippet":{"channelId":"channel"},"status":{"podcastStatus":"unspecified"}}]})) }))
+        .route("/videos", get(|| async { Json(json!({"items":[{"id":"episode","snippet":{"channelId":"channel"}}]})) }))
+        .route("/items", get(|| async { Json(json!({"kind":"youtube#playlistItemListResponse"})) })
+            .post(move |Json(body): Json<Value>| { let counter = counter.clone(); async move {
+                assert_eq!(body["snippet"]["playlistId"], "show");
+                assert_eq!(body["snippet"]["resourceId"]["videoId"], "episode");
+                counter.fetch_add(1, Ordering::SeqCst);
+                Json(json!({"id":"membership","snippet":body["snippet"]}))
+            }}));
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    Arc::get_mut(&mut p.0).unwrap().endpoints = Endpoints {
+        token: format!("{base}/token"),
+        playlists: format!("{base}/playlists"),
+        videos: format!("{base}/videos"),
+        playlist_items: format!("{base}/items"),
+        ..Endpoints::default()
+    };
+    account(&p).await;
+    p.set("youtube_manage_channel", "channel").await.unwrap();
+    let input: podcast::PodcastInput = serde_json::from_value(json!({"request_id":Uuid::new_v4().to_string(),"channel_id":"channel","action":"add_episode","playlist_id":"show","video_id":"episode","full_episode":true})).unwrap();
+    let result = p.manage_podcast(input.clone()).await.unwrap();
+    assert_eq!(result["status"], "completed");
+    assert_eq!(p.manage_podcast(input).await.unwrap(), result);
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
+    server.abort();
 }

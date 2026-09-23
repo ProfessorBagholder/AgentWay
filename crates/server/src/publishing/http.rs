@@ -75,6 +75,12 @@ impl Publisher {
     pub fn bridge_router(&self) -> Router {
         Router::new()
             .route("/v1/status", get(status))
+            .route("/v1/youtube/playlists", get(playlists))
+            .route("/v1/youtube/podcasts", post(podcast))
+            .route(
+                "/v1/youtube/podcast-operations/{id}",
+                get(podcast_operation),
+            )
             .route("/v1/youtube/channel", get(channel_profile))
             .route("/v1/youtube/channel/description", post(channel_description))
             .route("/v1/media", post(create_media))
@@ -486,4 +492,26 @@ async fn channel_description(
         StatusCode::OK
     };
     Ok((status, Json(result)).into_response())
+}
+
+async fn playlists(
+    State(p): State<Publisher>,
+    Query(input): Query<podcast::PlaylistQuery>,
+) -> Api<Value> {
+    Ok(Json(p.youtube_playlists(input).await?))
+}
+async fn podcast(
+    State(p): State<Publisher>,
+    Json(input): Json<podcast::PodcastInput>,
+) -> Result<Response, Error> {
+    let result = p.manage_podcast(input).await?;
+    let status = if result["status"] == "outcome_unknown" || result["status"] == "upload_pending" {
+        StatusCode::ACCEPTED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, Json(result)).into_response())
+}
+async fn podcast_operation(State(p): State<Publisher>, Path(id): Path<String>) -> Api<Value> {
+    Ok(Json(p.podcast_operation(&id).await?))
 }
