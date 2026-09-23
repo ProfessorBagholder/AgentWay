@@ -1,0 +1,74 @@
+# Reliable handoffs between existing agents
+
+Status: architecture proposal, 2026-09-23. No receiver integration is implemented or verified by this document. The current feature branch has a permissioned, durable **pull inbox**, not unattended delivery. This proposal refines the [delivery gate](handoff-delivery-gate.md) using [prior art](handoff-prior-art.md) and the existing [workspace model](multi-agent-workspace.md).
+
+## Decision and invariant
+
+AgentWay remains a bridge for the user's existing agents. It stores an authorized assignment, routes it to the **bound receiver for the intended agent**, records what the receiver actually acknowledged and did, and routes the result back to the originating agent. It does not instantiate a substitute model or silently start a different native conversation. Different products may use different receiver transports, but every advertised recipient must meet the same visible contract.
+
+The connection credential is a principal for calling AgentWay. It is **not** a session address, evidence that the client is running, or permission to inject into every conversation belonging to that product. A receiver binding is a separate, owner-approved mapping from one AgentWay connection to one native agent/session target (or a product's documented single-agent home), with a generation and observed capability. Multiple connections from the same product remain distinct. If a product cannot provide a stable, supported target, it can still publish through AgentWay but is not handoff-ready.
+
+## Architecture
+
+```mermaid
+sequenceDiagram
+    participant S as Sending agent
+    participant A as AgentWay
+    participant R as Recipient receiver
+    participant N as Native agent/session
+    S->>A: Create task (recipient, request_id, scope)
+    A->>A: Authorize; save task + outbox event atomically
+    A-->>S: Queued (not delivered)
+    A->>R: Deliver task ID + delivery ID
+    R-->>A: Admission receipt (not execution)
+    R->>N: Wake/bind exact intended session
+    N->>A: Claim task; acknowledge; fetch content
+    A-->>S: Recipient accepted
+    N->>A: Progress / result / failure
+    A->>A: Commit result + result-delivery event
+    A->>S: Wake original bound session with result ID
+    S->>A: Acknowledge result
+```
+
+The receiver transport can be a supported native API, A2A endpoint, or a product extension/companion that can invoke that product's supported session entry point. An outbound persistent connection from a local companion to AgentWay is preferable when the native client cannot accept inbound connections. A product-native recurring routine that checks AgentWay can also qualify **if** it is durable, runs unattended within a measured pickup deadline, addresses the same agent/session, and exposes receipt/failure; a one-off reminder or “check your inbox when you next use a tool” does not qualify. The companion must actually start/notify the native agent; keeping an SSE/WebSocket open only to read AgentWay's queue is insufficient. A native API that starts a new, unrelated assistant is not equivalent to delivery to the connected agent. Avoid browser automation and unsupported desktop-process injection as production transports.
+
+Persist in the existing SQLite installation: `receiver_bindings` (connection, product, opaque target, binding generation, transport, verified capabilities, last successful check), the existing `agent_handoffs` task identity and permissioned content, `handoff_delivery_outbox` (event/delivery IDs, binding generation, due time, attempts, native correlation, safe error), `handoff_receipts` (admission, agent acceptance, result-delivery acknowledgment), and structured history events. Use a schema migration that preserves all current tasks and publishing jobs. The task write, audit event and outbox insert commit in **one transaction**. The dispatcher retries the outbox after restart; an in-memory signal may accelerate it but is never the source of truth. Exhausted retries move to an owner-visible recovery state rather than disappearing. At-least-once dispatch with durable deduplication is the realistic guarantee; exactly-once external execution is not assumed.
+
+## Receiver contract
+
+A receiver registers during an owner-approved connection flow and proves all of these against its actual product: it can address the intended agent/session, accept a stable delivery ID, wake that target while idle, fetch a task using its own scoped credential, acknowledge or reject it, and return a result. The receiver binding records a target generation so a stale session cannot be reused after reconnection or reassignment. The owner should not need to copy a session ID manually when a native integration can establish the binding during setup. If multiple native sessions are eligible, setup must let the owner choose or establish one; AgentWay must not guess from the bearer token or “most recent” session.
+
+The versioned adapter boundary has five operations: `register(binding, proof)`, `deliver(task_id, delivery_id, generation)`, `receipt(delivery_id, accepted|rejected, native_run_id?)`, `observe(native_run_id)` and `cancel(native_run_id)`. A transport may implement `observe` by authenticated callback or polling. AgentWay owns retries, deadlines, grants and task state; adapters translate only native addressing and native receipts. `register` must verify ownership of the target and reject an unsupported session type. A receiver that can admit but not prove agent acceptance is not handoff-ready. A recipient may reject for unsupported work, capacity, expired authorization or need for human input; these are typed outcomes, not generic 500s.
+
+The dispatcher sends only a short, trusted envelope containing the task ID, delivery ID and AgentWay origin. The recipient fetches instructions and authorized asset references through AgentWay after authentication. Treat instructions from another agent as **untrusted task data** relative to the recipient's system/user instructions. A handoff never transfers the sender's platform credentials or grants: every recipient tool call is checked against that recipient's own principal, the owner's directed handoff grant, and any task-scoped access. Attachment handles are scoped, expiring and auditable; no raw secrets or unrestricted signed media URLs in notifications/logs. Protect receiver URLs against SSRF, authenticate both directions, encrypt transport and redact diagnostics.
+
+Readiness is per connection and binding, not per product logo. It requires an unattended round trip to the exact target, recorded evidence and a freshness limit. A heartbeat alone proves a transport is alive, not that the native session accepted work. If the binding becomes stale or revoked, discovery stops offering that recipient; existing work remains visible and enters bounded retry/recovery. Re-verification after native client updates or target changes cannot silently point at a different conversation. Sender return delivery needs the **same receiver contract**: a completed task sitting in AgentWay is not a result delivered to an idle origin agent.
+
+## Task semantics and recovery
+
+Keep task execution state separate from delivery state. Existing task states remain readable; add delivery facts without redefining `queued` as received. The minimum observable milestones are **recorded**, **dispatched**, **receiver admitted**, **agent accepted**, **running**, **result committed**, and **result delivered**. Rejection, timeout, recipient offline, input required, cancellation requested and outcome unknown are explicit paths with an actionable reason. HTTP 2xx from a hook is only admission unless its documented response proves more. The recipient's authenticated claim or native run receipt proves acceptance; the result is delivered only when the intended sender session or a documented native channel confirms delivery.
+
+The sender's `request_id` deduplicates creation; the outbox `delivery_id` deduplicates receiver invocation; a recipient claim token/lease fences competing workers; native provider idempotency keys and receipts deduplicate external effects where supported. On a lost response, query AgentWay/native correlation before retrying. If a provider may have acted but cannot be queried, record `outcome_unknown` and require reconciliation rather than firing the same potentially harmful action again. A duplicate notification may wake an agent twice but must not create a second task or perform a second publication. Reassignment creates an explicit new attempt under the same parent task; it never changes history or grants behind the recipient's back.
+
+Cancellation is best effort once native execution has started. AgentWay fences subsequent bridge writes and sends a cancellation request where supported, but does not claim to undo a publication or stop provider inference without proof. Preserve late results as history without letting them overwrite the terminal state. A recipient request for user input pauses execution and routes the question to the appropriate original conversation or owner action; it has its own deadline. Bound delegation depth, fan-out, per-agent concurrency and retries to prevent loops and runaway work. The original sender remains accountable for the task; child work and the result route carry parent/task correlation IDs.
+
+Owner grants authorize an agent pair and allowed work scope ahead of time; ordinary authorized handoffs should not stop for a new UI approval on every task. A task outside those grants is rejected before dispatch. Unknown allowance or capacity is reported as unknown, not guessed or used as an implicit grant. A receiver can decline work it cannot perform and return a specific reason; AgentWay does not silently select another agent. Any fallback requires an owner-authorized alternate and a recorded new attempt.
+
+## Product fit and interoperability
+
+Use an internal versioned receiver interface so transport differences do not leak into task semantics. A2A's [Agent Card, contexts and task lifecycle](https://a2a-protocol.org/latest/specification/) are useful for interoperable peers that expose A2A, but A2A callbacks are updates to a task the client already initiated, not a general wake API for native products. MCP remains an agent-to-AgentWay tool surface; [MCP Tasks](https://tasks.extensions.modelcontextprotocol.io/specification/draft/tasks) could improve long-running tool status, not initiate work in an idle agent. [OpenClaw's hooks](https://docs.openclaw.ai/automation/cron-jobs/webhooks) show the critical distinction between admission and actual delivery; its [ACP/session delivery](https://docs.openclaw.ai/tools/acp-agents/delivery) and [canonical session commit](https://docs.openclaw.ai/automation/cron-jobs/delivery) show why an explicit target and conversation-owner writer matter. [LangSmith's worker design](https://docs.langchain.com/langsmith/data-plane) and the [transactional outbox pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/cqrs) support persistent truth plus disposable wake signals.
+
+Muse, Grok Bot, Codex desktop, Claude and ChatGPT each require a separate official receiver-capability check and a live test. Grok Bot's documented [Bot-to-Bot wake](https://docs.x.ai/grok-bot/chat-and-collaboration) is within its own product; its [routines](https://docs.x.ai/grok-bot/skills-routines-and-automations) can run on a schedule or selected external events, which warrants a targeted feasibility test but is not evidence of a generic AgentWay event trigger. Muse documents [background goals and monitoring](https://ai.meta.com/muse/), but their availability as a bound AgentWay receiver and their pickup deadline are unverified. A2A, an MCP connection or a generic model API cannot create a missing native ingress. If a provider supports only creating a new agent/session, report that as a different capability; do not label it handoff to the user's connected agent. Capabilities may be added per product only after they meet the **same** user-visible behavior; absent support is an honest unavailable state, not feature disparity hidden behind inconsistent UI.
+
+## UI contract
+
+Keep the existing information architecture and [UI system](ui-system.md). Agents retains its concise name-and-connection-badge rows; agent detail can show handoff readiness and a concrete setup/recovery action **only when relevant**. Grant editing lists permitted sender → recipient pairs, never a matrix of every possible agent. Discovery excludes unverified or stale recipients. Tasks shows title, sender → recipient, last meaningful state and time. Its detail shows the assignment, delivery/acceptance/result milestones and recovery actions. Activity log contains the full correlated attempt chain and sanitized errors. Do not add a second event list, placeholder tiles, vague “online” claims or decorative explanation text. Responsive views retain sender, recipient and status.
+
+## Rollout and acceptance
+
+1. Preserve the existing publishing API and saved handoffs. Add the binding/outbox schema and dispatcher behind a disabled feature flag; migrate old pull-only tasks as `queued`, with no invented delivery receipt. Unit and crash tests cover transactional creation, restart dispatch, duplicate delivery, lease fencing, permission revocation, cancellation and result routing.
+2. Implement one receiver adapter only after official product documentation or a supported extension confirms the exact session entry point. Live-test enrollment and an idle wake into the intended conversation, then a result back into the original sender conversation. No user relay, no synthetic model substitute and no external publication in the proof.
+3. Prove cross-product, bidirectional handoff with two real connected products. Test idle/restart, disconnected/stale receiver, lost admission/result response, duplicate and out-of-order notification, busy target session, wrong target generation, permission change, question, cancellation and untrusted task text. Check that each state shown in AgentWay is backed by a receipt/event and that no duplicate side effect occurs.
+4. Only then expose readiness and assignment for verified connections. Repeat the same acceptance suite for every advertised recipient product. Where official ingress is absent, keep that product available for its existing publishing tools but unavailable as a handoff recipient, with a specific reason in connection detail. PR remains draft until the release gate is met.
+
+The largest unresolved dependency is not the dispatcher: it is **supported ingress to, and result delivery from, the exact native agents users already connected**. Research has found sound patterns for the rest of the system but has not established that every target product currently exposes that ingress. Do not represent this design as implemented or guaranteed until those product-specific proofs exist.

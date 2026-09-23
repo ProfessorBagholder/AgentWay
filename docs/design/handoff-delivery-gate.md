@@ -2,7 +2,7 @@
 
 Status: design and integration proof, 2026-09-23. The current feature branch is **not** a complete cross-agent handoff release.
 
-See [prior-art research](handoff-prior-art.md) for existing delivery, protocol and durable-execution systems and their limits for AgentWay.
+See [prior-art research](handoff-prior-art.md) and the [receiver architecture proposal](handoff-delivery-architecture.md) for existing systems, the proposed implementation, and the product-specific proof still needed.
 
 ## Product contract
 
