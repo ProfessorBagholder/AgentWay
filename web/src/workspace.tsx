@@ -571,6 +571,7 @@ function Youtube() {
 }
 function HandoffPermissions({ connection }: { connection: BridgeConnection }) {
   const connections = useConnections();
+  const [optimistic, setOptimistic] = useState<string[] | null>(null);
   const grants = useQuery<string[]>({
     queryKey: ["agent-handoff-grants", connection.id],
     queryFn: () =>
@@ -588,23 +589,13 @@ function HandoffPermissions({ connection }: { connection: BridgeConnection }) {
         recipient_id,
         enabled,
       }),
-    onMutate: ({ recipient_id, enabled }) => {
-      const key = ["agent-handoff-grants", connection.id];
-      const previous = cache.getQueryData<string[]>(key) ?? [];
-      cache.setQueryData<string[]>(
-        key,
-        enabled
-          ? [...new Set([...previous, recipient_id])]
-          : previous.filter((id) => id !== recipient_id),
-      );
-      return previous;
+    onError: () => {
+      setOptimistic(null);
     },
-    onError: (_error, _variables, previous) => {
-      if (previous)
-        cache.setQueryData(["agent-handoff-grants", connection.id], previous);
+    onSuccess: (ids) => {
+      cache.setQueryData(["agent-handoff-grants", connection.id], ids);
+      setOptimistic(null);
     },
-    onSuccess: (ids) =>
-      cache.setQueryData(["agent-handoff-grants", connection.id], ids),
   });
   const peers = connections.data.filter(
     (c) => c.id !== connection.id && c.state === "Connected",
@@ -625,14 +616,20 @@ function HandoffPermissions({ connection }: { connection: BridgeConnection }) {
             <label className="check" key={peer.id}>
               <input
                 type="checkbox"
-                checked={grants.data.includes(peer.id)}
+                checked={(optimistic ?? grants.data).includes(peer.id)}
                 disabled={change.isPending}
-                onChange={(e) =>
+                onChange={(e) => {
+                  const current = optimistic ?? grants.data;
+                  setOptimistic(
+                    e.target.checked
+                      ? [...new Set([...current, peer.id])]
+                      : current.filter((id) => id !== peer.id),
+                  );
                   change.mutate({
                     recipient_id: peer.id,
                     enabled: e.target.checked,
-                  })
-                }
+                  });
+                }}
               />
               Assign tasks to {peer.name}
               {peers.filter((candidate) => candidate.name === peer.name)
