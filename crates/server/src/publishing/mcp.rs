@@ -1,8 +1,9 @@
 use super::*;
 use rmcp::{
-    ServerHandler,
+    RoleServer, ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerConfig},
+    service::RequestContext,
     tool, tool_handler, tool_router,
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
@@ -10,7 +11,6 @@ use rmcp::{
 };
 #[derive(Clone)]
 pub struct PublishingTools {
-    publisher: Publisher,
     tool_router: ToolRouter<Self>,
 }
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -33,20 +33,27 @@ pub struct DeleteRequest {
 }
 #[tool_router]
 impl PublishingTools {
-    fn new(publisher: Publisher) -> Self {
+    fn new(_publisher: Publisher) -> Self {
         Self {
-            publisher,
             tool_router: Self::tool_router(),
         }
+    }
+    fn publisher_for(&self, ctx: &RequestContext<RoleServer>) -> Result<Publisher, String> {
+        ctx.extensions
+            .get::<axum::http::request::Parts>()
+            .and_then(|parts| parts.extensions.get::<Publisher>())
+            .cloned()
+            .ok_or_else(|| "Authenticated connection is required".into())
     }
     #[tool(
         description = "List the connected channel's playlists and podcastStatus, or supply playlist_id to read that playlist and its episodes. Follow nextPageToken with page_token. Before podcast setup, ask whether the user wants their full episodes organized as a YouTube podcast unless they already decided. Reuse existing playlists/videos; keep promotional shorts separate."
     )]
     async fn list_youtube_playlists(
         &self,
+        ctx: RequestContext<RoleServer>,
         Parameters(input): Parameters<podcast::PlaylistQuery>,
     ) -> Result<rmcp::Json<Value>, String> {
-        self.publisher
+        self.publisher_for(&ctx)?
             .youtube_playlists(input)
             .await
             .map(rmcp::Json)
@@ -57,9 +64,10 @@ impl PublishingTools {
     )]
     async fn manage_youtube_podcast(
         &self,
+        ctx: RequestContext<RoleServer>,
         Parameters(input): Parameters<podcast::PodcastInput>,
     ) -> Result<rmcp::Json<Value>, String> {
-        self.publisher
+        self.publisher_for(&ctx)?
             .manage_podcast(input)
             .await
             .map(rmcp::Json)
@@ -70,9 +78,10 @@ impl PublishingTools {
     )]
     async fn get_youtube_podcast_operation(
         &self,
+        ctx: RequestContext<RoleServer>,
         Parameters(input): Parameters<UploadId>,
     ) -> Result<rmcp::Json<Value>, String> {
-        self.publisher
+        self.publisher_for(&ctx)?
             .podcast_operation(&input.id)
             .await
             .map(rmcp::Json)
@@ -81,8 +90,11 @@ impl PublishingTools {
     #[tool(
         description = "Read the connected YouTube channel ID, title and current channel description before editing it."
     )]
-    async fn get_youtube_channel(&self) -> Result<rmcp::Json<Value>, String> {
-        self.publisher
+    async fn get_youtube_channel(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
             .youtube_channel()
             .await
             .map(rmcp::Json)
@@ -93,9 +105,10 @@ impl PublishingTools {
     )]
     async fn set_youtube_channel_description(
         &self,
+        ctx: RequestContext<RoleServer>,
         Parameters(input): Parameters<ChannelDescriptionInput>,
     ) -> Result<rmcp::Json<Value>, String> {
-        self.publisher
+        self.publisher_for(&ctx)?
             .set_channel_description(input)
             .await
             .map(rmcp::Json)
@@ -106,9 +119,10 @@ impl PublishingTools {
     )]
     async fn delete_replaced_youtube_video(
         &self,
+        ctx: RequestContext<RoleServer>,
         Parameters(request): Parameters<DeleteRequest>,
     ) -> Result<rmcp::Json<VideoOperation>, String> {
-        self.publisher
+        self.publisher_for(&ctx)?
             .delete_replaced_video(&request.id, request.input)
             .await
             .map(rmcp::Json)
@@ -117,8 +131,11 @@ impl PublishingTools {
     #[tool(
         description = "List the latest 100 AgentWay publications, including publication IDs and YouTube URLs, to identify originals and corrections without uploading duplicates."
     )]
-    async fn list_publications(&self) -> Result<rmcp::Json<Value>, String> {
-        self.publisher
+    async fn list_publications(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
             .list()
             .await
             .and_then(|v| Ok(serde_json::to_value(v)?))
@@ -130,9 +147,10 @@ impl PublishingTools {
     )]
     async fn get_youtube_video(
         &self,
+        ctx: RequestContext<RoleServer>,
         Parameters(input): Parameters<UploadId>,
     ) -> Result<rmcp::Json<Value>, String> {
-        self.publisher
+        self.publisher_for(&ctx)?
             .youtube_video_status(&input.id)
             .await
             .map(rmcp::Json)
@@ -143,9 +161,10 @@ impl PublishingTools {
     )]
     async fn set_youtube_visibility(
         &self,
+        ctx: RequestContext<RoleServer>,
         Parameters(request): Parameters<VisibilityRequest>,
     ) -> Result<rmcp::Json<VideoOperation>, String> {
-        self.publisher
+        self.publisher_for(&ctx)?
             .set_video_visibility(&request.id, request.input)
             .await
             .map(rmcp::Json)
@@ -156,9 +175,10 @@ impl PublishingTools {
     )]
     async fn get_video_operation(
         &self,
+        ctx: RequestContext<RoleServer>,
         Parameters(input): Parameters<UploadId>,
     ) -> Result<rmcp::Json<VideoOperation>, String> {
-        self.publisher
+        self.publisher_for(&ctx)?
             .video_operation(&input.id)
             .await
             .map(rmcp::Json)
@@ -169,9 +189,10 @@ impl PublishingTools {
     )]
     async fn list_video_operations(
         &self,
+        ctx: RequestContext<RoleServer>,
         Parameters(input): Parameters<UploadId>,
     ) -> Result<rmcp::Json<Vec<VideoOperation>>, String> {
-        self.publisher
+        self.publisher_for(&ctx)?
             .video_operations(&input.id)
             .await
             .map(rmcp::Json)
@@ -180,8 +201,11 @@ impl PublishingTools {
     #[tool(
         description = "Read the connected YouTube channel and owner's private-only policy before publishing."
     )]
-    async fn youtube_status(&self) -> Result<rmcp::Json<Value>, String> {
-        self.publisher
+    async fn youtube_status(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
             .status()
             .await
             .map(rmcp::Json)
@@ -192,9 +216,10 @@ impl PublishingTools {
     )]
     async fn create_media_upload(
         &self,
+        ctx: RequestContext<RoleServer>,
         Parameters(input): Parameters<MediaInput>,
     ) -> Result<rmcp::Json<Value>, String> {
-        self.publisher
+        self.publisher_for(&ctx)?
             .create_media(input)
             .await
             .map(rmcp::Json)
@@ -205,9 +230,10 @@ impl PublishingTools {
     )]
     async fn publish_youtube(
         &self,
+        ctx: RequestContext<RoleServer>,
         Parameters(input): Parameters<PublishInput>,
     ) -> Result<rmcp::Json<Value>, String> {
-        self.publisher
+        self.publisher_for(&ctx)?
             .enqueue(input)
             .await
             .and_then(|v| Ok(serde_json::to_value(v)?))
@@ -219,9 +245,10 @@ impl PublishingTools {
     )]
     async fn get_publication(
         &self,
+        ctx: RequestContext<RoleServer>,
         Parameters(input): Parameters<UploadId>,
     ) -> Result<rmcp::Json<Value>, String> {
-        self.publisher
+        self.publisher_for(&ctx)?
             .verified_publication(&input.id)
             .await
             .and_then(|v| Ok(serde_json::to_value(v)?))
@@ -233,9 +260,10 @@ impl PublishingTools {
     )]
     async fn retry_publication(
         &self,
+        ctx: RequestContext<RoleServer>,
         Parameters(input): Parameters<UploadId>,
     ) -> Result<rmcp::Json<Value>, String> {
-        self.publisher
+        self.publisher_for(&ctx)?
             .retry(&input.id)
             .await
             .and_then(|v| Ok(serde_json::to_value(v)?))
@@ -258,6 +286,9 @@ impl Publisher {
         let mut config = StreamableHttpServerConfig::default();
         config.cancellation_token = self.0.shutdown.child_token();
         config.json_response = true;
+        // No session IDs or resumable SSE streams to cross connection boundaries.
+        // Every tool invocation authenticates its own HTTP request.
+        config.legacy_session_mode = false;
         // This isolated agent listener authenticates every request and rejects all browser
         // Origins before the SDK. It accepts changing HTTPS tunnel hostnames.
         config.allowed_hosts.clear();

@@ -1,9 +1,10 @@
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
 import { Moon, Sun, ArrowLeft, ExternalLink, ChevronRight } from "lucide-react";
 import { cache, request } from "./api";
 import {
-  useConnection,
+  useConnections,
+  upsertConnection,
   useYoutube,
   usePublications,
   usePublication,
@@ -61,10 +62,14 @@ function ConnectionBadge({ c }: { c: BridgeConnection }) {
   return <Badge value={c.state} />;
 }
 function Agents() {
-  const c = useConnection();
+  const c = useConnections();
   return (
     <>
-      <Heading title="Agents" />
+      <Heading title="Agents">
+        <a className="button primary" href="#/agents/connect">
+          Connect agent
+        </a>
+      </Heading>
       {c.isPending ? (
         <Loading />
       ) : c.error ? (
@@ -79,16 +84,18 @@ function Agents() {
               </tr>
             </thead>
             <tbody>
-              <tr>
-                <td data-label="Agent">
-                  <a href="#/agents/publishing">
-                    <strong>{c.data.name}</strong>
-                  </a>
-                </td>
-                <td data-label="Connection">
-                  <ConnectionBadge c={c.data} />
-                </td>
-              </tr>
+              {c.data.map((connection) => (
+                <tr key={connection.id}>
+                  <td data-label="Agent">
+                    <a href={`#/agents/${connection.id}`}>
+                      <strong>{connection.name}</strong>
+                    </a>
+                  </td>
+                  <td data-label="Connection">
+                    <ConnectionBadge c={connection} />
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </section>
@@ -96,18 +103,30 @@ function Agents() {
     </>
   );
 }
-function AgentDetail() {
-  const c = useConnection(),
+function AgentDetail({ id }: { id: string }) {
+  const c = useConnections(),
     y = useYoutube();
   if (c.isPending || y.isPending) return <Loading />;
   if (c.error || y.error) return <ErrorMessage error={c.error || y.error} />;
+  const connection = c.data.find((c) => c.id === id);
+  if (!connection)
+    return (
+      <>
+        <Back to="agents">Agents</Back>
+        <p role="alert">Connection not found.</p>
+      </>
+    );
   return (
     <>
       <Back to="agents">Agents</Back>
-      <Heading title={c.data.name}>
-        <ConnectionBadge c={c.data} />
+      <Heading title={connection.name}>
+        <ConnectionBadge c={connection} />
       </Heading>
-      <AgentControls connection={c.data} youtube={y.data} />
+      <AgentControls
+        key={connection.id}
+        connection={connection}
+        youtube={y.data}
+      />
     </>
   );
 }
@@ -122,9 +141,12 @@ function AgentControls({
   const [confirm, setConfirm] = useState(false);
   const change = useMutation({
     mutationFn: ({ action, body }: { action: string; body: unknown }) =>
-      request<BridgeConnection>(`/api/publishing/connection/${action}`, body),
+      request<BridgeConnection>(
+        `/api/agent-connections/${c.id}/${action}`,
+        body,
+      ),
     onSuccess: (r) => {
-      cache.setQueryData(["bridge-connection"], r);
+      upsertConnection(r);
       setPermission(null);
       setConfirm(false);
     },
@@ -145,7 +167,7 @@ function AgentControls({
                 checked={permission ?? c.publish_enabled}
                 onChange={(e) => setPermission(e.target.checked)}
               />
-              Publish videos
+              Publish and manage YouTube
             </label>
             <div className="actions">
               <button
@@ -167,7 +189,13 @@ function AgentControls({
           </div>
         </section>
       )}
-      {c.state !== "Disconnected" && <ConnectionInstructions status={y} />}
+      {c.state !== "Disconnected" && (
+        <ConnectionInstructions
+          key={c.id + c.state}
+          status={y}
+          connection={c}
+        />
+      )}
       {c.state === "Disconnected" ? (
         <button
           className="primary"
@@ -203,9 +231,101 @@ function AgentControls({
     </div>
   );
 }
+function AgentLinks({ connections }: { connections: BridgeConnection[] }) {
+  const enabled = connections.filter(
+    (c) => c.publish_enabled && c.state === "Connected",
+  );
+  return enabled.length ? (
+    <>
+      {enabled.map((c, i) => (
+        <Fragment key={c.id}>
+          {i > 0 && ", "}
+          <a href={`#/agents/${c.id}`}>{c.name}</a>
+        </Fragment>
+      ))}
+    </>
+  ) : (
+    <>None</>
+  );
+}
+function ConnectAgent() {
+  const [product, setProduct] = useState("Grok Bot");
+  const [permission, setPermission] = useState(false);
+  const y = useYoutube();
+  const create = useMutation({
+    mutationFn: () =>
+      request<BridgeConnection>("/api/agent-connections", {
+        product,
+        publish_enabled: permission,
+      }),
+    onSuccess: (c) => {
+      upsertConnection(c);
+      window.location.hash = `/agents/${c.id}`;
+    },
+  });
+  return (
+    <>
+      <Back to="agents">Agents</Back>
+      <Heading title="Connect agent" />
+      <form
+        className="settings-list"
+        onSubmit={(e) => {
+          e.preventDefault();
+          create.mutate();
+        }}
+      >
+        <div className="setting-row">
+          <h2>
+            <label htmlFor="agent-product">Agent</label>
+          </h2>
+          <div className="connection-field">
+            <select
+              id="agent-product"
+              value={product}
+              onChange={(e) => setProduct(e.target.value)}
+            >
+              <option>Grok Bot</option>
+              <option>Muse</option>
+              <option>Claude</option>
+              <option>ChatGPT</option>
+            </select>
+          </div>
+        </div>
+        {y.data?.account && (
+          <div className="setting-row">
+            <h2>YouTube</h2>
+            <div className="connection-field">
+              <span>{y.data.account.name}</span>
+              <label className="settings-check">
+                <input
+                  type="checkbox"
+                  checked={permission}
+                  onChange={(e) => setPermission(e.target.checked)}
+                />
+                Publish and manage YouTube
+              </label>
+            </div>
+          </div>
+        )}
+        <div className="setting-row">
+          <span />
+          <div className="connection-field">
+            <button
+              className="primary"
+              disabled={create.isPending || y.isPending || !!y.error}
+            >
+              {create.isPending ? "Creating…" : "Continue"}
+            </button>
+            <ErrorMessage error={create.error || y.error} />
+          </div>
+        </div>
+      </form>
+    </>
+  );
+}
 function Platforms() {
   const y = useYoutube(),
-    c = useConnection();
+    c = useConnections();
   return (
     <>
       <Heading title="Platforms">
@@ -241,11 +361,7 @@ function Platforms() {
                   <Badge value="Connected" />
                 </td>
                 <td data-label="Agents">
-                  {c.data.publish_enabled && c.data.state !== "Disconnected" ? (
-                    <a href="#/agents/publishing">{c.data.name}</a>
-                  ) : (
-                    "None"
-                  )}
+                  <AgentLinks connections={c.data} />
                 </td>
               </tr>
             </tbody>
@@ -261,7 +377,7 @@ function Platforms() {
 }
 function Youtube() {
   const y = useYoutube(),
-    c = useConnection();
+    c = useConnections();
   const [confirm, setConfirm] = useState(false);
   const connect = useMutation({
     mutationFn: () => request<{ url: string }>("/api/youtube/connect", {}),
@@ -322,11 +438,8 @@ function Youtube() {
                   <Loading />
                 ) : c.error ? (
                   <ErrorMessage error={c.error} />
-                ) : c.data.publish_enabled &&
-                  c.data.state !== "Disconnected" ? (
-                  <a href="#/agents/publishing">{c.data.name}</a>
                 ) : (
-                  <p>None</p>
+                  <AgentLinks connections={c.data} />
                 )}
               </div>
             </section>
@@ -886,8 +999,9 @@ export function Workspace({ route }: { route: string }) {
   const [path, search] = route.split("?");
   const query = new URLSearchParams(search);
   if (path === "agents") return <Agents />;
-  if (path === "agents/publishing" || path === "agents/connect")
-    return <AgentDetail />;
+  if (path === "agents/connect") return <ConnectAgent />;
+  if (path.startsWith("agents/"))
+    return <AgentDetail key={path} id={path.split("/")[1]} />;
   if (path === "platforms") return <Platforms />;
   if (path === "platforms/youtube" || path === "platforms/connect")
     return <Youtube />;

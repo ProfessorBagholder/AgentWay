@@ -10,7 +10,16 @@ impl Publisher {
             let next: Result<Option<String>, _> = sqlx::query_scalar("SELECT id FROM publications WHERE status IN ('queued','uploading') ORDER BY created_at LIMIT 1").fetch_optional(&self.0.db).await;
             match next {
                 Ok(Some(id)) => {
-                    if let Err(error) = self.upload(&id).await {
+                    let owner: Result<String, _> =
+                        sqlx::query_scalar("SELECT agent_id FROM publications WHERE id=?")
+                            .bind(&id)
+                            .fetch_one(&self.0.db)
+                            .await;
+                    let result = match owner {
+                        Ok(owner) => self.for_connection(&owner).upload(&id).await,
+                        Err(e) => Err(e.into()),
+                    };
+                    if let Err(error) = result {
                         // Error strings here deliberately exclude URLs, provider responses and credentials.
                         if let Err(storage_error) = self.fail(&id, &error.to_string()).await {
                             tracing::error!(%storage_error, "could not persist upload failure");

@@ -16,36 +16,6 @@ pub(super) fn routes() -> Router<Publisher> {
         .route("/api/publications/{id}/history", get(history))
         .route("/api/publications/{id}/visibility", get(visibility))
 }
-impl Publisher {
-    pub(super) async fn check_publish_access(&self) -> Result<()> {
-        if self.setting("agent_disconnected").await?.as_deref() == Some("true")
-            || self.setting("publish_enabled").await?.as_deref() == Some("false")
-        {
-            bail!(
-                "Publishing permission has been removed. Check the agent's platform permissions."
-            );
-        }
-        Ok(())
-    }
-    pub(super) async fn workspace_connection(&self) -> Result<Value> {
-        let activity = self.activity().await?;
-        let historical: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM publications")
-            .fetch_one(&self.0.db)
-            .await?;
-        let disconnected = self.setting("agent_disconnected").await?.as_deref() == Some("true");
-        let reset = self.setting("connection_reset").await?.as_deref() == Some("true");
-        let state = if disconnected {
-            "Disconnected"
-        } else if activity.is_some() || (!reset && historical > 0) {
-            "Connected"
-        } else {
-            "Setup incomplete"
-        };
-        Ok(
-            json!({"id":"publishing", "name":self.setting("agent_connection_name").await?.unwrap_or_else(|| "Agent".into()), "state":state, "publish_enabled":self.setting("publish_enabled").await?.as_deref()!=Some("false"), "activity":activity}),
-        )
-    }
-}
 #[derive(Deserialize)]
 struct Access {
     publish_enabled: bool,
@@ -65,25 +35,12 @@ async fn access(State(p): State<Publisher>, Json(input): Json<Access>) -> Api<Va
 }
 async fn changed(p: &Publisher) -> Api<Value> {
     let value = p.workspace_connection().await?;
-    p.emit("bridge.connection", value.clone()).await?;
+    p.emit("agent.connection", value.clone()).await?;
     Ok(Json(value))
 }
 async fn disconnect(State(p): State<Publisher>) -> Api<Value> {
     let _guard = p.0.mutation.lock().await;
-    // Atomic revocation. Keep all media and publication history; never reuse the old credential.
-    let mut tx = p.0.db.begin().await?;
-    let replacement = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-    for (key, value) in [
-        ("agent_token", p.0.vault.seal(&replacement)?),
-        ("agent_disconnected", "true".into()),
-        ("connection_reset", "true".into()),
-    ] {
-        sqlx::query("INSERT INTO publishing_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(key).bind(value).execute(&mut *tx).await?;
-    }
-    sqlx::query("DELETE FROM bridge_activity")
-        .execute(&mut *tx)
-        .await?;
-    tx.commit().await?;
+    p.disconnect_connection().await?;
     changed(&p).await
 }
 async fn enable(State(p): State<Publisher>) -> Api<Value> {

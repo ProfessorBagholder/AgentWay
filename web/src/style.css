@@ -1426,3 +1426,18 @@ fieldset {
 .settings-check input {
   margin: 0;
 }
+
+.connection-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.connection-field select {
+  min-height: var(--control-height);
+  width: 100%;
+}
+.connection-field > span {
+  padding-top: var(--space-3);
+}

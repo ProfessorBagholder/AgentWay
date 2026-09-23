@@ -3,15 +3,19 @@ import { test, expect } from "@playwright/test";
 test("publishing loads real account state and keeps navigation and credentials local", async ({
   page,
 }) => {
-  await page.route("**/api/publishing/connection", (r) =>
+  await page.route("**/api/agent-connections", (r) =>
     r.fulfill({
-      json: {
-        id: "publishing",
-        name: "Muse",
-        state: "Connected",
-        publish_enabled: true,
-        activity: null,
-      },
+      json: [
+        {
+          id: "publishing",
+          name: "Muse",
+          product: "Muse",
+          revision: 1,
+          state: "Connected",
+          publish_enabled: true,
+          activity: null,
+        },
+      ],
     }),
   );
   await page.goto("/#publishing");

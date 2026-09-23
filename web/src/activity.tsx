@@ -13,31 +13,38 @@ export interface BridgeActivity {
 export interface BridgeConnection {
   id: string;
   name: string;
+  product: string;
+  revision: number;
   state: string;
   publish_enabled: boolean;
   activity: BridgeActivity | null;
 }
-export function renameConnection(name: string) {
-  cache.setQueryData<BridgeConnection>(["bridge-connection"], (old) =>
-    old ? { ...old, name } : old,
-  );
-}
-export function upsertActivity(activity: BridgeActivity) {
-  cache.setQueryData<BridgeConnection>(["bridge-connection"], (old) =>
-    !old || (old.activity && old.activity.revision >= activity.revision)
-      ? old
-      : {
-          ...old,
-          activity,
-          state: old.state === "Disconnected" ? old.state : "Connected",
-        },
-  );
-}
-export function useConnection() {
-  return useQuery({
-    queryKey: ["bridge-connection"],
-    queryFn: () => request<BridgeConnection>("/api/publishing/connection"),
+export function upsertConnection(connection: BridgeConnection) {
+  cache.setQueryData<BridgeConnection[]>(["agent-connections"], (old) => {
+    if (!old) return [connection];
+    const existing = old.find((c) => c.id === connection.id);
+    if (existing && existing.revision > connection.revision) return old;
+    return existing
+      ? old.map((c) => (c.id === connection.id ? connection : c))
+      : [...old, connection];
   });
+}
+export function useConnections() {
+  const loaded = useQuery({
+    queryKey: ["agent-connections-loaded"],
+    queryFn: async () => {
+      const fetched = await request<BridgeConnection[]>(
+        "/api/agent-connections",
+      );
+      fetched.forEach(upsertConnection);
+      return true;
+    },
+  });
+  const { data = [] } = useQuery<BridgeConnection[]>({
+    queryKey: ["agent-connections"],
+    enabled: false,
+  });
+  return { ...loaded, data };
 }
 export function useYoutube() {
   return useQuery({

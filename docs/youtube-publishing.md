@@ -10,7 +10,7 @@ For a hosted agent such as Muse, `./run --share` additionally starts a temporary
 
 The app port defaults to 8787; the agent port defaults to 8788. Override with `--port` and `--bridge-port`. The management app is loopback-only. HTTP/MCP clients authenticate to the separate agent port using a bearer token. HTTPS must terminate at a trusted reverse proxy/tunnel for remote access. Browser-origin requests to the agent listener are rejected.
 
-Quick tunnels are for testing, have provider availability/body-size restrictions, and do not support long-lived SSE. AgentWay's HTTP API works without SSE; Muse should use that API for this test. Keep videos sent through a Cloudflare Free-plan proxy under 90 MiB until resumable receiving uploads are integrated. A named tunnel fixes hostname stability, not the per-request body limit; AgentWay's own file cap is 2 GiB and total reservation cap is 10 GiB. MCP over a normal HTTPS proxy supports Streamable HTTP, including clients using older session-based versions; quick-tunnel MCP compatibility is not claimed.
+Quick tunnels are for testing, have provider availability/body-size restrictions, and do not support long-lived SSE. AgentWay's HTTP API works without SSE; Muse should use that API for this test. Keep videos sent through a Cloudflare Free-plan proxy under 90 MiB until resumable receiving uploads are integrated. A named tunnel fixes hostname stability, not the per-request body limit; AgentWay's own file cap is 2 GiB and total reservation cap is 10 GiB. MCP over a normal HTTPS proxy supports Streamable HTTP, with stateless JSON responses for older and newer protocol versions; quick-tunnel MCP compatibility is not claimed.
 
 ## Authorize YouTube
 
@@ -74,7 +74,7 @@ Mock-provider coverage verifies public requests resulting in private or public v
 
 ## Agents and Tasks
 
-Agents shows the existing owner-named publishing connection. It does not infer client identity from the shared token or claim that an agent is online. Platform permission changes are enforced at admission, retry and worker transfer boundaries. Disconnect replaces the credential and disables access while preserving uploads; clients must explicitly set up again with the replacement credential. No existing credential or permission changes during app upgrade.
+Agents lists independent connections. Each has its own encrypted bearer token and YouTube publish/manage permission. The existing connection retains its credential on upgrade. Authenticated HTTP/MCP traffic establishes connection status, and new uploads record that connection's identity. Disconnect revokes only that credential and its worker's subsequent chunks; it preserves history. Media and upload retries belong to their creating connection. Connected-channel reads and published video management are owner-shared within the granted permission. Tokens do not expire automatically and are not OAuth refresh tokens.
 
 Tasks lists actual publication jobs and submitted video settings. Activity log groups the persisted publication transitions and errors by upload, with paginated history. New events include timestamps; old steps do not acquire invented timestamps. This log does not yet cover every pre-publication or infrastructure error. Legacy saved placeholder agent/task rows remain in storage but do not appear in these screens. Browser tests use intercepted fixtures and never create sample records in the user's database.
 
@@ -221,3 +221,14 @@ References: [YouTube podcast creation](https://support.google.com/youtube/answer
 
 
 Cover uploads use Google's resumable protocol with an encrypted, durable session URL. `upload_pending` returns HTTP 202, a safe error code and provider HTTP status when available. Retry `set_cover` with identical arguments and the same request UUID: AgentWay queries the saved session and transfers only missing bytes. A lost final response is reconciled through that session. A 404/410 from an existing cover session retires it. The next same-ID retry re-reads current hero artwork and initializes a replacement upload for the same image, selecting update when artwork exists. Session errors from initialization remain provider rejections. Legacy multipart covers with `outcome_unknown` can be retried with their original arguments: the same requested artwork is applied to the current hero resource (or inserted if absent), using a resumable session. This recovery is specific to mutable cover artwork, not playlist or episode creation. Reading an operation returns the last saved state; resuming performs the recovery and updates that state.
+
+## Connect Grok Bot
+
+1. In AgentWay, open Agents → Connect agent, choose Grok Bot, select the YouTube permission if desired, and Continue.
+2. Use its Connection instructions to configure a custom MCP connector in Grok Bot. Server URL for this development deployment: `https://dev.agentway.win/mcp`. Transport is Streamable HTTP. Authentication is `Authorization: Bearer <token>` using this connection's Show token value in the agent's secure secret field. No model API key or Google credential is needed. Exact Grok Bot custom-install UI has not yet been validated.
+3. Discover tools and call `youtube_status` first. Check returned `connection.id`, `connection.publish_enabled`, channel and `agent_guidance`. Do not upload as part of connection verification. AgentWay changes this connection to Connected on authenticated traffic.
+4. After this works, explicitly request a small private test upload and verify its result. Muse must remain connected. Do not reuse Muse's token for Grok Bot.
+
+Available MCP tools: `youtube_status`, `create_media_upload`, `publish_youtube`, `list_publications`, `get_publication`, `retry_publication`, `get_youtube_video`, `set_youtube_visibility`, `get_video_operation`, `list_video_operations`, `delete_replaced_youtube_video`, `get_youtube_channel`, `set_youtube_channel_description`, `list_youtube_playlists`, `manage_youtube_podcast`, `get_youtube_podcast_operation`. Schemas come from tools/list; current settings and limits come from agent_guidance. Drafts, scheduled publishing, dry-run provider validation and additional social platforms are not implemented.
+
+Official Grok Bot documentation describes account-wide plugins and a shared cloud computer: https://docs.x.ai/grok-bot/computer-and-apps. An AgentWay credential separates it from Muse, but cannot distinguish individual Bots that share that credential.
