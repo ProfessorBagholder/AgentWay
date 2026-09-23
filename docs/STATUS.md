@@ -69,6 +69,10 @@ The user reported Grok Bot's live acceptance: guidance 14, 113,246,208-byte disp
 
 Deletion recovery also has a stalled-storage regression test: readiness is invalidated under the application lock, then storage deletion retains only the media lock. Unrelated permission changes remain responsive while tusd is unavailable or slow.
 
-## Transfer activity test branch (not merged)
+## Transfer activity (merged in PR17)
 
 The owner UI now projects standalone media transfers into Tasks and Activity log using the existing work table, with paginated transfer records and steps. A publication absorbs its media transfer steps into the same expanded operation instead of appearing as a duplicate top-level event. Recorded transfer progress and safe transport error codes are journaled with timestamps; tusd remains authoritative for resume offsets. Historical verified transfers recover their full byte count from the saved ready event. Existing pre-migration transfer timestamps are shown only when recoverable from retained media records. This slice does not yet include OAuth, infrastructure or pre-reservation failure chains.
+
+## Publication journal reliability (test branch)
+
+Publication creation, retry, upload progress, completion and failure now save the publication row and its Activity log event in one SQLite transaction. A journal-insert failure rolls the state change back. No-op retries and failures after an already completed upload do not emit misleading publication transitions. This change preserves existing request IDs, credentials and YouTube upload sessions. Automated tests cover journal failure during creation and retry, recovery when completion was confirmed but its journal insert failed, and restart recovery of a lost YouTube completion response. Live provider behavior is not claimed by these tests.

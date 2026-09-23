@@ -147,6 +147,63 @@ async fn authentication_media_limits_and_idempotency() {
     assert!(!stored.contains("secret"));
 }
 #[tokio::test]
+async fn publication_and_journal_commit_or_roll_back_together() {
+    let (_dir, p) = fixture().await;
+    account(&p).await;
+    let request = input(media(&p).await);
+    sqlx::query("CREATE TRIGGER reject_publication_event BEFORE INSERT ON events WHEN NEW.kind='publication.upsert' BEGIN SELECT RAISE(ABORT, 'journal unavailable'); END")
+        .execute(&p.0.db).await.unwrap();
+    assert!(p.enqueue(request.clone()).await.is_err());
+    let publications: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM publications")
+        .fetch_one(&p.0.db)
+        .await
+        .unwrap();
+    assert_eq!(publications, 0, "queue entry must roll back with its event");
+
+    sqlx::query("DROP TRIGGER reject_publication_event")
+        .execute(&p.0.db)
+        .await
+        .unwrap();
+    let queued = p.enqueue(request).await.unwrap();
+    let queued_event: Value = serde_json::from_str(&sqlx::query_scalar::<_, String>(
+        "SELECT payload FROM events WHERE kind='publication.upsert' ORDER BY sequence DESC LIMIT 1",
+    ).fetch_one(&p.0.db).await.unwrap()).unwrap();
+    assert_eq!(queued_event["id"], queued.id);
+    assert_eq!(queued_event["status"], "queued");
+    assert!(queued_event["event_at"].is_string());
+
+    sqlx::query("UPDATE publications SET status='interrupted',revision=revision+1 WHERE id=?")
+        .bind(&queued.id)
+        .execute(&p.0.db)
+        .await
+        .unwrap();
+    let before = p.publication(&queued.id).await.unwrap();
+    sqlx::query("CREATE TRIGGER reject_publication_event BEFORE INSERT ON events WHEN NEW.kind='publication.upsert' BEGIN SELECT RAISE(ABORT, 'journal unavailable'); END")
+        .execute(&p.0.db).await.unwrap();
+    assert!(p.retry(&queued.id).await.is_err());
+    let after = p.publication(&queued.id).await.unwrap();
+    assert_eq!(after.status, "interrupted");
+    assert_eq!(after.revision, before.revision);
+
+    sqlx::query("DROP TRIGGER reject_publication_event")
+        .execute(&p.0.db)
+        .await
+        .unwrap();
+    let retried = p.retry(&queued.id).await.unwrap();
+    assert_eq!(retried.status, "queued");
+    assert_eq!(retried.revision, before.revision + 1);
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE kind='publication.upsert' AND json_extract(payload,'$.id')=?")
+        .bind(&queued.id).fetch_one(&p.0.db).await.unwrap();
+    assert_eq!(count, 2);
+    p.retry(&queued.id).await.unwrap();
+    let unchanged: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE kind='publication.upsert' AND json_extract(payload,'$.id')=?")
+        .bind(&queued.id).fetch_one(&p.0.db).await.unwrap();
+    assert_eq!(
+        unchanged, count,
+        "a no-op retry must not add a journal step"
+    );
+}
+#[tokio::test]
 async fn oauth_state_requires_matching_cookie_expires_and_is_single_use() {
     let (_dir, p) = fixture().await;
     account(&p).await;
@@ -217,6 +274,94 @@ async fn receive(State(s): State<Mock>, body: axum::body::Bytes) -> axum::respon
     s.received.fetch_add(1, Ordering::SeqCst);
     // Simulate accepted video plus a lost final response.
     StatusCode::SERVICE_UNAVAILABLE.into_response()
+}
+async fn receive_confirmed(
+    State(s): State<Mock>,
+    body: axum::body::Bytes,
+) -> axum::response::Response {
+    if body.is_empty() {
+        if s.received.load(Ordering::SeqCst) > 0 {
+            return Json(json!({"id":"test_video"})).into_response();
+        }
+        return StatusCode::PERMANENT_REDIRECT.into_response();
+    }
+    assert_eq!(&body[..], &[1, 2, 3, 4]);
+    s.received.fetch_add(1, Ordering::SeqCst);
+    Json(json!({"id":"test_video"})).into_response()
+}
+#[tokio::test]
+async fn confirmed_upload_recovers_when_completion_journal_was_unavailable() {
+    let (_dir, mut p) = fixture().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let state = Mock {
+        base: base.clone(),
+        initiated: Arc::new(AtomicUsize::new(0)),
+        received: Arc::new(AtomicUsize::new(0)),
+    };
+    let mock = Router::new()
+        .route(
+            "/token",
+            post(|| async {
+                Json(json!({"access_token":"access","token_type":"Bearer","expires_in":3600}))
+            }),
+        )
+        .route(
+            "/upload/youtube/v3/videos",
+            post(initiate).put(receive_confirmed),
+        )
+        .with_state(state.clone());
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    Arc::get_mut(&mut p.0).unwrap().endpoints = Endpoints {
+        token: format!("{base}/token"),
+        upload: format!("{base}/upload/youtube/v3/videos"),
+        ..Endpoints::default()
+    };
+    account(&p).await;
+    let job = p.enqueue(input(media(&p).await)).await.unwrap();
+    sqlx::query("CREATE TRIGGER reject_completion_event BEFORE INSERT ON events WHEN NEW.kind='publication.upsert' AND json_extract(NEW.payload,'$.status')='uploaded' BEGIN SELECT RAISE(ABORT, 'journal unavailable'); END")
+        .execute(&p.0.db).await.unwrap();
+    let worker = p.start_worker();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if p.publication(&job.id).await.unwrap().status == "interrupted" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let interrupted = p.publication(&job.id).await.unwrap();
+    assert!(interrupted.video_url.is_none());
+    assert_eq!(state.initiated.load(Ordering::SeqCst), 1);
+    assert_eq!(state.received.load(Ordering::SeqCst), 1);
+    sqlx::query("DROP TRIGGER reject_completion_event")
+        .execute(&p.0.db)
+        .await
+        .unwrap();
+    p.retry(&job.id).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if p.publication(&job.id).await.unwrap().status == "uploaded" {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(state.initiated.load(Ordering::SeqCst), 1);
+    assert_eq!(state.received.load(Ordering::SeqCst), 1);
+    let uploaded = p.publication(&job.id).await.unwrap();
+    let event: Value = serde_json::from_str(&sqlx::query_scalar::<_, String>(
+        "SELECT payload FROM events WHERE kind='publication.upsert' AND json_extract(payload,'$.id')=? ORDER BY sequence DESC LIMIT 1",
+    ).bind(&job.id).fetch_one(&p.0.db).await.unwrap()).unwrap();
+    assert_eq!(event["status"], "uploaded");
+    assert_eq!(event["revision"], uploaded.revision);
+    p.0.shutdown.cancel();
+    worker.await.unwrap();
+    server.abort();
 }
 #[tokio::test]
 async fn restart_recovers_lost_final_response_without_duplicate_upload() {

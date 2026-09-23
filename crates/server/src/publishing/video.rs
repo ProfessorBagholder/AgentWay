@@ -354,14 +354,7 @@ impl Publisher {
         if status == "completed" {
             sqlx::query("UPDATE publications SET deleted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),revision=revision+1 WHERE id=?")
                 .bind(id).execute(&mut *tx).await?;
-            let publication: Publication = sqlx::query_as("SELECT * FROM publications WHERE id=?")
-                .bind(id)
-                .fetch_one(&mut *tx)
-                .await?;
-            sqlx::query("INSERT INTO events(kind,payload) VALUES('publication.upsert',?)")
-                .bind(serde_json::to_string(&publication)?)
-                .execute(&mut *tx)
-                .await?;
+            Self::publish_event_tx(&mut tx, id).await?;
         }
         sqlx::query("UPDATE video_operations SET status=?,result=?,error=? WHERE request_id=?")
             .bind(status)
