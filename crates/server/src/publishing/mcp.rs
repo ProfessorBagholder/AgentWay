@@ -48,7 +48,7 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "Read the saved outcome of a video settings operation by request_id. To reconcile a pending operation, retry update_youtube_video with its original arguments; this only reads, never rewrites."
+        description = "Read and reconcile a video settings operation by request_id against current YouTube readback. Poll no faster than every five seconds; this never rewrites the video."
     )]
     async fn get_youtube_settings_operation(
         &self,
@@ -296,6 +296,62 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
+        description = "Reserve a resumable media transfer. Supply request_id, exact size, MIME type and whole-file SHA-256. Identical creation retries return the same media ID. Transfer raw bytes over returned tus HTTP URL in chunks at most max_chunk_bytes, with the same bearer token. HEAD recovers confirmed offset after interruption; PATCH uses Tus-Resumable: 1.0.0, Upload-Offset, Content-Type: application/offset+octet-stream and preferably Upload-Checksum: sha256 <base64>. Call complete_media_upload to verify the complete file before publishing. Never send binary or base64 media through MCP."
+    )]
+    async fn create_resumable_media_upload(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<super::transfers::CreateUpload>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .create_resumable_upload(input)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Read a resumable media transfer's confirmed offset, size, state and expiry. Only ready=true means whole-file integrity was verified. Use this or HEAD on the upload URL before resuming after network loss."
+    )]
+    async fn get_media_upload(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<UploadId>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .media_upload_status(&input.id)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Verify the complete staged file against its declared SHA-256 and mark it ready for publishing. Requires offset=size. Idempotent: retry after interruption. A checksum mismatch prevents publication; cancel that media and create a new transfer with correct source metadata."
+    )]
+    async fn complete_media_upload(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<UploadId>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .complete_media_upload(&input.id)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Cancel/remove an unused resumable media transfer and release its storage reservation. Idempotent. Refuses media referenced by publishing or pending provider operations. Does not delete any published YouTube content."
+    )]
+    async fn cancel_media_upload(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<UploadId>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .cancel_media_upload(&input.id)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
         description = "Reserve video, PNG/JPEG artwork, or timed UTF-8 SRT/WebVTT caption storage. Returns an authenticated HTTP PUT path for raw file bytes. Transfer the file from your own environment; do not pass a local filesystem path or base64 through MCP."
     )]
     async fn create_media_upload(
@@ -310,7 +366,7 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "Upload finished media to the connected YouTube channel. Requires a completed media PUT. Returns a persisted job; use get_publication until uploaded or interrupted. Reuse request_id on retries. A video_url confirms upload only. Use get_publication and confirm actual_privacy matches requested_privacy before claiming the requested visibility. YouTube still processes uploaded videos, and determines Shorts classification. Explicit made_for_kids and contains_synthetic_media booleans are required. Optional settings support category, tags, languages, scheduled publication, embedding, license, public statistics, paid product placement, recording date and localized titles/descriptions. Omitted category retains legacy Entertainment (24); choose category explicitly. subscriber notifications default to on; set notify_subscribers=false to disable them. Only schema fields are supported; report any required unsupported setting before uploading. Read get_youtube_video for metadata/disclosure readback and etag; use update_youtube_video for edits."
+        description = "Upload finished media to the connected YouTube channel. Requires verified ready media from complete_media_upload, or a completed legacy media PUT. Returns a persisted job; use get_publication until uploaded or interrupted. Reuse request_id on retries. A video_url confirms upload only. Use get_publication and confirm actual_privacy matches requested_privacy before claiming the requested visibility. YouTube still processes uploaded videos, and determines Shorts classification. Explicit made_for_kids and contains_synthetic_media booleans are required. Optional settings support category, tags, languages, scheduled publication, embedding, license, public statistics, paid product placement, recording date and localized titles/descriptions. Omitted category retains legacy Entertainment (24); choose category explicitly. subscriber notifications default to on; set notify_subscribers=false to disable them. Only schema fields are supported; report any required unsupported setting before uploading. Read get_youtube_video for metadata/disclosure readback and etag; use update_youtube_video for edits."
     )]
     async fn publish_youtube(
         &self,

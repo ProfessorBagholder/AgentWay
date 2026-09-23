@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+id=$(jq -er '.Event.Upload.MetaData.agentway_attempt | select(test("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"))')
+# Atomic claim is deliberately retained after termination. A duplicate create
+# must never truncate an existing file, including after uncertain responses.
+mkdir -p /srv/tusd-data/.claims
+if ! mkdir "/srv/tusd-data/.claims/$id" 2>/dev/null; then
+  printf '%s\n' '{"RejectUpload":true,"HTTPResponse":{"StatusCode":409}}'
+  exit 0
+fi
+printf '{"ChangeFileInfo":{"ID":"%s"}}\n' "$id"

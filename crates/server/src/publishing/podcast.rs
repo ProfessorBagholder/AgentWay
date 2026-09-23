@@ -325,7 +325,7 @@ impl Publisher {
                 {
                     bail!("Cover must be a PNG/JPEG of at most 2 MiB");
                 }
-                let bytes = tokio::fs::read(self.0.dir.join("media").join(media_id)).await?;
+                let bytes = tokio::fs::read(self.media_file(media_id).await?).await?;
                 let format = image::guess_format(&bytes)
                     .map_err(|_| anyhow::anyhow!("Invalid cover image"))?;
                 if format.to_mime_type() != media.mime {

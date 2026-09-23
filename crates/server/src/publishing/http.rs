@@ -19,16 +19,43 @@ impl<E: Into<anyhow::Error>> From<E> for Error {
 }
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
-        let message = if self.0.is::<sqlx::Error>() || self.0.is::<std::io::Error>() {
+        if let Some(error) = self.0.downcast_ref::<transfers::TransferError>() {
+            let mut response = (
+                StatusCode::from_u16(error.status).unwrap(),
+                Json(json!({"error":error.code,"offset":error.offset})),
+            )
+                .into_response();
+            if let Some(offset) = error.offset {
+                response
+                    .headers_mut()
+                    .insert("upload-offset", offset.to_string().parse().unwrap());
+            }
+            if error.status == 429 || error.status == 503 {
+                response
+                    .headers_mut()
+                    .insert("retry-after", "5".parse().unwrap());
+            }
+            return response;
+        }
+        let storage_failure = self.0.is::<sqlx::Error>() || self.0.is::<std::io::Error>();
+        let message = if storage_failure {
             "Storage operation failed".to_string()
         } else {
             self.0.to_string()
         };
-        (StatusCode::BAD_REQUEST, Json(json!({"error":message}))).into_response()
+        (
+            if storage_failure {
+                StatusCode::INTERNAL_SERVER_ERROR
+            } else {
+                StatusCode::BAD_REQUEST
+            },
+            Json(json!({"error":message})),
+        )
+            .into_response()
     }
 }
 // Bridge middleware supplies authenticated state; admin routes retain the local owner context.
-struct AgentState(Publisher);
+pub(super) struct AgentState(pub(super) Publisher);
 impl axum::extract::FromRequestParts<Publisher> for AgentState {
     type Rejection = StatusCode;
     async fn from_request_parts(
@@ -68,6 +95,7 @@ impl Publisher {
         Router::new()
             .merge(super::workspace::routes())
             .merge(super::connections::routes())
+            .route("/health/media", get(media_health))
             .route("/api/youtube", get(status))
             .route("/api/youtube/config", post(config))
             .route("/api/youtube/connect", post(connect))
@@ -100,6 +128,16 @@ impl Publisher {
             .route("/v1/youtube/channel", get(channel_profile))
             .route("/v1/youtube/channel/description", post(channel_description))
             .route("/v1/media", post(create_media))
+            .route("/v1/media/uploads", post(transfers::create))
+            .route(
+                "/v1/media/uploads/{id}",
+                get(transfers::status).delete(transfers::cancel),
+            )
+            .route("/v1/media/uploads/{id}/complete", post(transfers::complete))
+            .route(
+                "/v1/media/uploads/{id}/bytes",
+                axum::routing::any(transfers::tus).layer(DefaultBodyLimit::disable()),
+            )
             .route(
                 "/v1/media/{id}",
                 put(upload_media)
@@ -127,6 +165,7 @@ impl Publisher {
             .nest_service("/mcp", self.mcp_service())
             .layer(DefaultBodyLimit::max(64 * 1024))
             .layer(middleware::from_fn_with_state(self.clone(), authenticate))
+            .layer(middleware::from_fn(transfers::tus_headers))
             .with_state(self.clone())
     }
 }
@@ -191,6 +230,11 @@ async fn authenticate(State(p): State<Publisher>, req: Request, next: Next) -> R
     let path = req.uri().path();
     let operation = match (req.method().as_str(), path) {
         ("GET", "/v1/status") => Some("Checked connection"),
+        ("POST", "/v1/media/uploads") => Some("Reserved resumable media"),
+        ("PATCH", p) if p.starts_with("/v1/media/uploads/") => Some("Transferred media chunk"),
+        ("POST", p) if p.starts_with("/v1/media/uploads/") && p.ends_with("/complete") => {
+            Some("Verified staged media")
+        }
         ("POST", "/v1/media") => Some("Reserved video upload"),
         ("PUT", p) if p.starts_with("/v1/media/") => Some("Transferred video"),
         ("DELETE", p) if p.starts_with("/v1/media/") => Some("Removed staged video"),
@@ -375,34 +419,32 @@ async fn publish(AgentState(p): AgentState, Json(input): Json<PublishInput>) -> 
     Ok(Json(p.enqueue(input).await?))
 }
 async fn remove_media(AgentState(p): AgentState, Path(id): Path<String>) -> Api<Value> {
-    let _guard = p.0.mutation.lock().await;
-    if Uuid::parse_str(&id).is_err() {
-        return Err(anyhow::anyhow!("Invalid media ID").into());
-    }
-    p.check_media_owner(&id).await?;
-    let used: i64 = sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM publications WHERE media_id=?) + (SELECT COUNT(*) FROM youtube_asset_operations WHERE json_extract(input,'$.media_id')=? AND json_extract(result,'$.status') IN ('upload_pending','outcome_unknown'))")
-        .bind(&id).bind(&id)
-        .fetch_one(&p.0.db)
-        .await?;
-    if used > 0 {
-        return Err(anyhow::anyhow!(
-            "Media is referenced by an upload and cannot be removed in this version"
-        )
-        .into());
-    }
-    sqlx::query("DELETE FROM media WHERE id=?")
-        .bind(&id)
-        .execute(&p.0.db)
-        .await?;
-    let _ = tokio::fs::remove_file(p.0.dir.join("media").join(id)).await;
+    p.check_publish_access().await?;
+    let _media = p.media_lock(&id).await?;
+    p.remove_media_locked(&id, "cancelled").await?;
     Ok(Json(json!({"removed":true})))
 }
+
 async fn upload_media(AgentState(p): AgentState, Path(id): Path<String>, body: Body) -> Api<Value> {
+    tokio::spawn(async move { upload_media_inner(p, id, body).await })
+        .await
+        .map_err(anyhow::Error::from)?
+}
+async fn upload_media_inner(p: Publisher, id: String, body: Body) -> Api<Value> {
+    let _media = p.media_lock(&id).await?;
     if Uuid::parse_str(&id).is_err() {
         return Err(anyhow::anyhow!("Invalid media ID").into());
     }
     p.check_publish_access().await?;
     p.check_media_owner(&id).await?;
+    let resumable: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM media_uploads WHERE media_id=?)")
+            .bind(&id)
+            .fetch_one(&p.0.db)
+            .await?;
+    if resumable {
+        return Err(anyhow::anyhow!("Use the resumable upload URL for this media").into());
+    }
     let media: Media = sqlx::query_as("SELECT * FROM media WHERE id=?")
         .bind(&id)
         .fetch_optional(&p.0.db)
@@ -415,7 +457,7 @@ async fn upload_media(AgentState(p): AgentState, Path(id): Path<String>, body: B
         p.0.transfers
             .try_acquire()
             .map_err(|_| anyhow::anyhow!("Two media transfers are already active. Retry later."))?;
-    // Unique temporary files prevent concurrent PUTs from overwriting each other's bytes.
+    // Serialize one file through receive and finalization; cancellation retains the lock until cleanup.
     let temp =
         p.0.dir
             .join("media")
@@ -570,4 +612,11 @@ async fn video_asset(
         StatusCode::ACCEPTED
     };
     Ok((status, Json(value)).into_response())
+}
+
+async fn media_health(State(p): State<Publisher>) -> Api<Value> {
+    p.transport_ready().await?;
+    Ok(Json(
+        json!({"status":"ready","component":"media_transport"}),
+    ))
 }

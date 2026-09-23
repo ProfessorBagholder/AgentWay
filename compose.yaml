@@ -2,20 +2,43 @@ name: agentway
 services:
   app:
     build: .
+    environment:
+      TUSD_URL: http://media:8080
+      TUSD_DATA_DIR: /tus-data
+      MEDIA_RESERVATION_BYTES: ${MEDIA_RESERVATION_BYTES:-10737418240}
+      MEDIA_MAX_VIDEO_BYTES: ${MEDIA_MAX_VIDEO_BYTES:-2147483648}
+    depends_on:
+      media:
+        condition: service_healthy
     init: true
     ports:
       - "127.0.0.1:${AGENTWAY_PORT:-8787}:8787"
       - "127.0.0.1:${AGENTWAY_BRIDGE_PORT:-8788}:8788"
     volumes:
       - agentway-data:/data
+      - agentway-media:/tus-data:ro
     restart: unless-stopped
     stop_grace_period: 15s
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8787/health/ready"]
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:8787/health/ready && curl --fail --silent http://127.0.0.1:8787/health/media"]
       interval: 3s
       timeout: 2s
       retries: 20
       start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+  media:
+    build: deploy/tusd
+    command: ["-upload-dir=/srv/tusd-data", "-hooks-dir=/srv/tusd-hooks", "-hooks-enabled-events=pre-create", "-disable-download", "-disable-cors", "-max-size=2147483648"]
+    volumes:
+      - agentway-media:/srv/tusd-data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/health"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
     security_opt:
       - no-new-privileges:true
     cap_drop: ["ALL"]
@@ -32,3 +55,4 @@ services:
     cap_drop: ["ALL"]
 volumes:
   agentway-data:
+  agentway-media:

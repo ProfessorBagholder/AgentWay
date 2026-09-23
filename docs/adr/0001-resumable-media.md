@@ -1,6 +1,6 @@
 # ADR 0001: Resumable agent-to-bridge media transport
 
-Date: 21 September 2026. Status: dependency selected for integration; production integration not implemented. Scope: local/self-hosted AgentWay, preserving the Rust application and current YouTube flow.
+Date: 21 September 2026. Status: accepted; integration on the resumable-receiving feature branch, pending live-agent acceptance and merge. Scope: local/self-hosted AgentWay, preserving the Rust application and current YouTube flow.
 
 ## Problem
 
@@ -65,3 +65,7 @@ The current 2 GiB artifact cap and 10 GiB reservation budget are application pol
 - [Hooks and their delivery behavior](https://tus.github.io/tusd/advanced-topics/hooks/)
 - [Pinned release](https://github.com/tus/tusd/releases/tag/v2.10.1)
 - [License](https://github.com/tus/tusd/blob/v2.10.1/LICENSE.txt)
+
+## Integration record (23 September 2026)
+
+See [resumable media](../resumable-media.md) for the implemented adapter and explicit remaining gates. A pinned pre-create hook assigns a unique, durably recorded attempt ID and rejects duplicate creation IDs. Offset authority stays in tusd. The app reads verified files through a read-only volume mount. Creation recovery polls known attempt IDs; it does not depend on post-create or completion callback delivery.
