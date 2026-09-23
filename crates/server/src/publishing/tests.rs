@@ -80,6 +80,7 @@ fn input(media_id: String) -> PublishInput {
         made_for_kids: false,
         contains_synthetic_media: false,
         notify_subscribers: true,
+        settings: Default::default(),
     }
 }
 async fn account(p: &Publisher) {
@@ -370,6 +371,12 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
             .any(|t| t["name"] == "publish_youtube")
     );
     for name in [
+        "update_youtube_video",
+        "get_youtube_settings_operation",
+        "list_youtube_categories",
+        "list_youtube_captions",
+        "manage_youtube_video_asset",
+        "get_youtube_asset_operation",
         "list_youtube_playlists",
         "manage_youtube_podcast",
         "get_youtube_podcast_operation",
@@ -930,7 +937,7 @@ async fn video_correction_reconciles_failures_preserves_settings_and_guards_reti
         Json(json!({"access_token":"access","token_type":"Bearer","expires_in":3600}))
     })).route("/videos", get(move |axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String,String>>| {
         let videos = get_videos.clone(); async move {
-            assert_eq!(q["part"], "snippet,status,processingDetails,contentDetails");
+            assert!(q["part"].contains("snippet,status,processingDetails,contentDetails"));
             Json(json!({"items":[videos.lock().unwrap().get(&q["id"]).unwrap().clone()]}))
         }
     }).put(move |axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String,String>>, Json(body): Json<Value>| {
@@ -1984,4 +1991,284 @@ async fn connection_migration_preserves_original_ciphertext_and_permission() {
     assert_eq!(p.setting("agent_token").await.unwrap().unwrap(), ciphertext);
     assert!(p.check_publish_access().await.is_err());
     assert_eq!(p.workspace_connection().await.unwrap()["name"], "Muse");
+}
+
+#[tokio::test]
+async fn settings_preserve_provider_fields_reconcile_restart_and_reject_stale_or_cross_agent_edits()
+{
+    let (dir, mut p) = fixture().await;
+    account(&p).await;
+    p.set("youtube_manage_channel", "channel").await.unwrap();
+    let job = p.enqueue(input(media(&p).await)).await.unwrap();
+    sqlx::query("UPDATE publications SET status='uploaded',video_id='video' WHERE id=?")
+        .bind(&job.id)
+        .execute(&p.0.db)
+        .await
+        .unwrap();
+    let item = Arc::new(std::sync::Mutex::new(
+        json!({"id":"video","etag":"v1","snippet":{"channelId":"channel","title":"Original","description":"Keep description","categoryId":"27","tags":["keep"],"defaultLanguage":"en"},"status":{"privacyStatus":"private","embeddable":false,"license":"creativeCommon","selfDeclaredMadeForKids":false,"containsSyntheticMedia":true,"uploadStatus":"processed"},"localizations":{"fr":{"title":"Titre","description":"Texte"}}}),
+    ));
+    let desired = Arc::new(std::sync::Mutex::new(None::<Value>));
+    let writes = Arc::new(AtomicUsize::new(0));
+    let read = item.clone();
+    let write = desired.clone();
+    let count = writes.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let mock = Router::new()
+        .route(
+            "/token",
+            post(|| async {
+                Json(json!({"access_token":"test","token_type":"Bearer","expires_in":3600}))
+            }),
+        )
+        .route(
+            "/videos",
+            axum::routing::get(move || {
+                let v = read.clone();
+                async move { Json(json!({"items":[v.lock().unwrap().clone()]})) }
+            })
+            .put(
+                move |headers: axum::http::HeaderMap, Json(body): Json<Value>| {
+                    let v = write.clone();
+                    let count = count.clone();
+                    async move {
+                        assert_eq!(headers["if-match"], "v1");
+                        assert_eq!(body["snippet"]["description"], "Keep description");
+                        assert_eq!(body["snippet"]["categoryId"], "27");
+                        assert_eq!(body["snippet"]["tags"], json!(["keep"]));
+                        assert!(body.get("status").is_none());
+                        assert!(body.get("localizations").is_none());
+                        *v.lock().unwrap() = Some(body.clone());
+                        count.fetch_add(1, Ordering::SeqCst);
+                        Json(body)
+                    }
+                },
+            ),
+        );
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    Arc::get_mut(&mut p.0).unwrap().endpoints.token = format!("{base}/token");
+    Arc::get_mut(&mut p.0).unwrap().endpoints.videos = format!("{base}/videos");
+    let request:settings::VideoUpdate=serde_json::from_value(json!({"request_id":Uuid::new_v4().to_string(),"publication_id":job.id,"expected_etag":"v1","title":"Updated"})).unwrap();
+    assert_eq!(
+        p.update_video_settings(request.clone()).await.unwrap()["status"],
+        "verification_pending"
+    );
+    assert_eq!(
+        p.update_video_settings(request.clone()).await.unwrap()["status"],
+        "verification_pending"
+    );
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
+    sqlx::query("INSERT INTO agent_connections(id,name,product,token,publish_enabled) VALUES('other','Grok','Grok Bot','unused',1)").execute(&p.0.db).await.unwrap();
+    let other = p.for_connection("other");
+    assert!(other.update_video_settings(request.clone()).await.is_err());
+    drop(other);
+    let endpoints = p.0.endpoints.clone();
+    let db = p.0.db.clone();
+    drop(p);
+    let mut p = Publisher::new(db, dir.path().join("publishing"), CancellationToken::new())
+        .await
+        .unwrap();
+    Arc::get_mut(&mut p.0).unwrap().endpoints = endpoints;
+    item.lock().unwrap()["snippet"]["title"] =
+        desired.lock().unwrap().as_ref().unwrap()["snippet"]["title"].clone();
+    item.lock().unwrap()["etag"] = json!("v2");
+    assert_eq!(
+        p.update_video_settings(request.clone()).await.unwrap()["status"],
+        "completed"
+    );
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
+    let mut stale = request.clone();
+    stale.request_id = Uuid::new_v4().to_string();
+    assert!(p.update_video_settings(stale).await.is_err());
+    let mut changed = request;
+    changed.title = Some("Another".into());
+    assert!(p.update_video_settings(changed).await.is_err());
+    server.abort();
+}
+
+#[test]
+fn video_settings_validate_and_map_without_changing_legacy_requests() {
+    let old = json!({"request_id":Uuid::new_v4().to_string(),"media_id":Uuid::new_v4().to_string(),"title":"Legacy","made_for_kids":false,"contains_synthetic_media":false});
+    let legacy = PublishInput::from_saved(&old.to_string()).unwrap();
+    assert!(!legacy.notify_subscribers);
+    assert_eq!(
+        legacy.youtube_metadata().unwrap()["snippet"]["categoryId"],
+        "24"
+    );
+    let mut new: PublishInput = serde_json::from_value(old).unwrap();
+    assert!(new.notify_subscribers);
+    new.settings=serde_json::from_value(json!({"category_id":"27","tags":["software engineering"],"default_language":"en-CA","default_audio_language":"en","publish_at":"2099-01-02T03:04:05Z","license":"creativeCommon","embeddable":false,"public_stats_viewable":false,"paid_product_placement":true,"recording_date":"2026-01-01T00:00:00Z","localizations":{"fr":{"title":"Titre","description":"Texte"}}})).unwrap();
+    new.settings.validate("private", true).unwrap();
+    let body = new.youtube_metadata().unwrap();
+    assert_eq!(body["snippet"]["categoryId"], "27");
+    assert_eq!(body["snippet"]["defaultAudioLanguage"], "en");
+    assert_eq!(body["status"]["embeddable"], false);
+    assert_eq!(
+        body["paidProductPlacementDetails"]["hasPaidProductPlacement"],
+        true
+    );
+    assert_eq!(body["localizations"]["fr"]["title"], "Titre");
+    assert!(new.settings.validate("public", true).is_err());
+    new.settings.publish_at = Some("2020-01-01T00:00:00Z".into());
+    assert!(new.settings.validate("private", true).is_err());
+    new.settings.publish_at = None;
+    new.settings.tags = Some(vec!["a".repeat(499), "b".into()]);
+    assert!(new.settings.validate("private", true).is_err());
+    new.settings.tags = None;
+    new.settings.default_language = Some("not a language".into());
+    assert!(new.settings.validate("private", true).is_err());
+    assert!(serde_json::from_value::<settings::VideoSettings>(json!({"made_up":true})).is_err());
+}
+
+#[tokio::test]
+async fn caption_upload_recovers_lost_completion_after_restart_without_duplicate_bytes() {
+    let (dir, mut p) = fixture().await;
+    account(&p).await;
+    p.set("youtube_manage_channel", "channel").await.unwrap();
+    let job = p.enqueue(input(media(&p).await)).await.unwrap();
+    sqlx::query("UPDATE publications SET status='uploaded',video_id='video' WHERE id=?")
+        .bind(&job.id)
+        .execute(&p.0.db)
+        .await
+        .unwrap();
+    let writes = Arc::new(AtomicUsize::new(0));
+    let count = writes.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let session = format!("{base}/captions?upload_id=secret-session");
+    let mock = Router::new()
+        .route(
+            "/token",
+            post(|| async {
+                Json(json!({"access_token":"test","token_type":"Bearer","expires_in":3600}))
+            }),
+        )
+        .route(
+            "/videos",
+            axum::routing::get(|| async {
+                Json(json!({"items":[{"id":"video","snippet":{"channelId":"channel"}}]}))
+            }),
+        )
+        .route(
+            "/captions",
+            axum::routing::get(|| async { Json(json!({"items":[]})) })
+                .post(move |Json(body): Json<Value>| {
+                    let session = session.clone();
+                    async move {
+                        assert_eq!(body["snippet"]["videoId"], "video");
+                        ([(axum::http::header::LOCATION, session)], "")
+                    }
+                })
+                .put(
+                    move |headers: axum::http::HeaderMap, bytes: axum::body::Bytes| {
+                        let count = count.clone();
+                        async move {
+                            if headers["content-range"]
+                                .to_str()
+                                .unwrap()
+                                .starts_with("bytes */")
+                            {
+                                if count.load(Ordering::SeqCst) == 0 {
+                                    return StatusCode::PERMANENT_REDIRECT.into_response();
+                                }
+                                return Json(
+                                    json!({"id":"caption","snippet":{"status":"serving"}}),
+                                )
+                                .into_response();
+                            }
+                            assert!(
+                                String::from_utf8(bytes.to_vec())
+                                    .unwrap()
+                                    .contains("00:00:01.000 --> 00:00:02.000")
+                            );
+                            count.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::SERVICE_UNAVAILABLE.into_response()
+                        }
+                    },
+                ),
+        );
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let ep = &mut Arc::get_mut(&mut p.0).unwrap().endpoints;
+    ep.token = format!("{base}/token");
+    ep.videos = format!("{base}/videos");
+    ep.captions = format!("{base}/captions");
+    ep.caption_upload = format!("{base}/captions");
+    let data = b"WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n";
+    let m = p
+        .create_media(MediaInput {
+            size: data.len() as i64,
+            mime: "text/vtt".into(),
+        })
+        .await
+        .unwrap();
+    let media_id = m["media_id"].as_str().unwrap();
+    assert_eq!(
+        call(
+            &p,
+            "PUT",
+            &format!("/v1/media/{media_id}"),
+            data.to_vec(),
+            true
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let request:assets::VideoAssetInput=serde_json::from_value(json!({"request_id":Uuid::new_v4().to_string(),"publication_id":job.id,"action":"set_caption","media_id":media_id,"language":"en","name":"English","is_draft":false})).unwrap();
+    let pending = p.manage_video_asset(request.clone()).await.unwrap();
+    assert_eq!(pending["status"], "upload_pending");
+    assert!(!pending.to_string().contains("secret-session"));
+    let ciphertext: String = sqlx::query_scalar(
+        "SELECT upload_session FROM youtube_asset_operations WHERE request_id=?",
+    )
+    .bind(&request.request_id)
+    .fetch_one(&p.0.db)
+    .await
+    .unwrap();
+    assert!(!ciphertext.contains("secret-session"));
+    let mut changed = request.clone();
+    changed.request_id = Uuid::new_v4().to_string();
+    assert!(p.manage_video_asset(changed).await.is_err());
+    let endpoints = p.0.endpoints.clone();
+    let db = p.0.db.clone();
+    drop(p);
+    let mut p = Publisher::new(db, dir.path().join("publishing"), CancellationToken::new())
+        .await
+        .unwrap();
+    Arc::get_mut(&mut p.0).unwrap().endpoints = endpoints;
+    assert_eq!(
+        p.manage_video_asset(request.clone()).await.unwrap()["status"],
+        "accepted"
+    );
+    assert_eq!(
+        p.manage_video_asset(request.clone()).await.unwrap()["status"],
+        "accepted"
+    );
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
+    let mut changed = request.clone();
+    changed.name = Some("Changed".into());
+    assert!(p.manage_video_asset(changed).await.is_err());
+    p.set("publish_enabled", "false").await.unwrap();
+    assert!(p.manage_video_asset(request).await.is_err());
+    server.abort();
+}
+
+#[tokio::test]
+async fn scheduling_respects_owner_policy_and_same_request_id_does_not_create_new_jobs() {
+    let (_dir, p) = fixture().await;
+    account(&p).await;
+    let mut request = input(media(&p).await);
+    request.settings.publish_at = Some("2099-01-01T00:00:00Z".into());
+    assert!(
+        p.enqueue(request.clone())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("private-only")
+    );
+    p.set("private_only", "false").await.unwrap();
+    let job = p.enqueue(request.clone()).await.unwrap();
+    p.set("private_only", "true").await.unwrap();
+    assert_eq!(p.enqueue(request).await.unwrap().id, job.id);
 }

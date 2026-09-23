@@ -617,6 +617,33 @@ function TaskRow({ id, filter }: { id: string; filter: string }) {
     </tr>
   );
 }
+// Display labels for YouTube's stable category IDs; discovery remains the authority for assignability.
+const youtubeCategoryNames: Record<string, string> = {
+  "1": "Film & Animation",
+  "2": "Autos & Vehicles",
+  "10": "Music",
+  "15": "Pets & Animals",
+  "17": "Sports",
+  "19": "Travel & Events",
+  "20": "Gaming",
+  "22": "People & Blogs",
+  "23": "Comedy",
+  "24": "Entertainment",
+  "25": "News & Politics",
+  "26": "Howto & Style",
+  "27": "Education",
+  "28": "Science & Technology",
+};
+function languageName(code: string | null | undefined) {
+  if (!code) return null;
+  try {
+    return (
+      new Intl.DisplayNames(undefined, { type: "language" }).of(code) ?? code
+    );
+  } catch {
+    return code;
+  }
+}
 interface Detail {
   publication: Publication;
   settings: {
@@ -624,6 +651,23 @@ interface Detail {
     made_for_kids: boolean;
     contains_synthetic_media: boolean;
     description: string;
+    notify_subscribers: boolean;
+    settings?: {
+      category_id?: string | null;
+      tags?: string[] | null;
+      default_language?: string | null;
+      default_audio_language?: string | null;
+      publish_at?: string | null;
+      license?: string | null;
+      embeddable?: boolean | null;
+      public_stats_viewable?: boolean | null;
+      paid_product_placement?: boolean | null;
+      recording_date?: string | null;
+      localizations?: Record<
+        string,
+        { title: string; description: string }
+      > | null;
+    };
   };
   channel_id: string;
 }
@@ -693,7 +737,7 @@ function TaskDetail({ id }: { id: string }) {
         </section>
         <section className="panel">
           <div className="panel-title">
-            <h2>Video settings</h2>
+            <h2>Submitted video settings</h2>
           </div>
           <div className="pad">
             <dl>
@@ -703,6 +747,93 @@ function TaskDetail({ id }: { id: string }) {
               <dd>{s.made_for_kids ? "Yes" : "No"}</dd>
               <dt>Altered or synthetic content</dt>
               <dd>{s.contains_synthetic_media ? "Yes" : "No"}</dd>
+              <dt>Subscriber notifications</dt>
+              <dd>{s.notify_subscribers ? "On" : "Off"}</dd>
+              <dt>Category</dt>
+              <dd>
+                {youtubeCategoryNames[s.settings?.category_id ?? "24"] ??
+                  s.settings?.category_id}
+              </dd>
+              {[
+                ["Tags", s.settings?.tags?.join(", ")],
+                [
+                  "Title and description language",
+                  languageName(s.settings?.default_language),
+                ],
+                [
+                  "Audio language",
+                  languageName(s.settings?.default_audio_language),
+                ],
+                [
+                  "Scheduled publication",
+                  s.settings?.publish_at
+                    ? new Date(s.settings.publish_at).toLocaleString(
+                        undefined,
+                        { timeZoneName: "short" },
+                      )
+                    : null,
+                ],
+                [
+                  "License",
+                  s.settings?.license === "creativeCommon"
+                    ? "Creative Commons"
+                    : s.settings?.license === "youtube"
+                      ? "Standard YouTube"
+                      : null,
+                ],
+                [
+                  "Embedding",
+                  s.settings?.embeddable == null
+                    ? null
+                    : s.settings.embeddable
+                      ? "Allowed"
+                      : "Disabled",
+                ],
+                [
+                  "Public statistics",
+                  s.settings?.public_stats_viewable == null
+                    ? null
+                    : s.settings.public_stats_viewable
+                      ? "Shown"
+                      : "Hidden",
+                ],
+                [
+                  "Paid promotion",
+                  s.settings?.paid_product_placement == null
+                    ? null
+                    : s.settings.paid_product_placement
+                      ? "Yes"
+                      : "No",
+                ],
+                [
+                  "Recording date",
+                  s.settings?.recording_date
+                    ? new Date(s.settings.recording_date).toLocaleDateString(
+                        undefined,
+                        { timeZone: "UTC" },
+                      )
+                    : null,
+                ],
+              ]
+                .filter(([, value]) => value != null)
+                .map(([label, value]) => (
+                  <Fragment key={label}>
+                    <dt>{label}</dt>
+                    <dd>{value || "None"}</dd>
+                  </Fragment>
+                ))}
+              {Object.entries(s.settings?.localizations ?? {}).map(
+                ([language, translation]) => (
+                  <Fragment key={language}>
+                    <dt>Translation ({languageName(language)})</dt>
+                    <dd className="preserve-lines">
+                      {translation.title}
+                      {"\n"}
+                      {translation.description}
+                    </dd>
+                  </Fragment>
+                ),
+              )}
               {s.description && (
                 <>
                   <dt>Description</dt>

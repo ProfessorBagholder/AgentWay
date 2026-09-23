@@ -107,6 +107,15 @@ impl Publisher {
                     .layer(DefaultBodyLimit::disable()),
             )
             .route("/v1/youtube/publish", post(publish))
+            .route("/v1/youtube/categories", get(categories))
+            .route("/v1/youtube/video-assets", post(video_asset))
+            .route("/v1/youtube/asset-operations/{id}", get(asset_operation))
+            .route("/v1/publications/{id}/captions", get(captions))
+            .route("/v1/youtube/video-settings", post(update_settings))
+            .route(
+                "/v1/youtube/settings-operations/{id}",
+                get(settings_operation),
+            )
             .route("/v1/publications", get(list))
             .route("/v1/publications/{id}", get(publication))
             .route("/v1/publications/{id}/youtube", get(video_status))
@@ -371,8 +380,8 @@ async fn remove_media(AgentState(p): AgentState, Path(id): Path<String>) -> Api<
         return Err(anyhow::anyhow!("Invalid media ID").into());
     }
     p.check_media_owner(&id).await?;
-    let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM publications WHERE media_id=?")
-        .bind(&id)
+    let used: i64 = sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM publications WHERE media_id=?) + (SELECT COUNT(*) FROM youtube_asset_operations WHERE json_extract(input,'$.media_id')=? AND json_extract(result,'$.status') IN ('upload_pending','outcome_unknown'))")
+        .bind(&id).bind(&id)
         .fetch_one(&p.0.db)
         .await?;
     if used > 0 {
@@ -518,4 +527,47 @@ async fn podcast(
 }
 async fn podcast_operation(AgentState(p): AgentState, Path(id): Path<String>) -> Api<Value> {
     Ok(Json(p.podcast_operation(&id).await?))
+}
+
+async fn update_settings(
+    AgentState(p): AgentState,
+    Json(input): Json<settings::VideoUpdate>,
+) -> Result<Response, Error> {
+    let value = p.update_video_settings(input).await?;
+    let status = if value["status"] == "completed" {
+        StatusCode::OK
+    } else if value["status"] == "rejected" {
+        StatusCode::BAD_REQUEST
+    } else {
+        StatusCode::ACCEPTED
+    };
+    Ok((status, Json(value)).into_response())
+}
+async fn settings_operation(AgentState(p): AgentState, Path(id): Path<String>) -> Api<Value> {
+    Ok(Json(p.settings_operation(&id).await?))
+}
+
+async fn categories(
+    AgentState(p): AgentState,
+    Query(q): Query<assets::CategoryQuery>,
+) -> Api<Value> {
+    Ok(Json(p.youtube_categories(q).await?))
+}
+async fn captions(AgentState(p): AgentState, Path(id): Path<String>) -> Api<Value> {
+    Ok(Json(p.youtube_captions(&id).await?))
+}
+async fn asset_operation(AgentState(p): AgentState, Path(id): Path<String>) -> Api<Value> {
+    Ok(Json(p.video_asset_operation(&id).await?))
+}
+async fn video_asset(
+    AgentState(p): AgentState,
+    Json(input): Json<assets::VideoAssetInput>,
+) -> Result<Response, Error> {
+    let value = p.manage_video_asset(input).await?;
+    let status = if value["status"] == "rejected" {
+        StatusCode::BAD_REQUEST
+    } else {
+        StatusCode::ACCEPTED
+    };
+    Ok((status, Json(value)).into_response())
 }

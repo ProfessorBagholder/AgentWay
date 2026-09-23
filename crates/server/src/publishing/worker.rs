@@ -65,18 +65,47 @@ impl Publisher {
             self.0.vault.open_secret(&value)?
         } else {
             let _guard = self.0.mutation.lock().await;
-            if input.privacy != "private"
+            if (input.privacy != "private" || input.settings.publish_at.is_some())
                 && self.setting("private_only").await?.as_deref() != Some("false")
             {
                 bail!("Private-only mode is enabled. This non-private upload was not started.");
             }
             self.check_publish_access().await?;
             let token = self.access_token(&channel).await?;
-            let response = self.0.client.post(&self.0.endpoints.upload)
-                .query(&[("uploadType","resumable"),("part","snippet,status"),("notifySubscribers",if input.notify_subscribers { "true" } else { "false" })])
-                .bearer_auth(token).header("X-Upload-Content-Length", media.size).header("X-Upload-Content-Type", &media.mime)
-                .json(&json!({"snippet":{"title":input.title,"description":input.description,"categoryId":"24"},"status":{"privacyStatus":input.privacy,"selfDeclaredMadeForKids":input.made_for_kids,"containsSyntheticMedia":input.contains_synthetic_media}}))
-                .send().await.map_err(|_|anyhow::anyhow!("Could not start YouTube upload. Check your network and retry."))?;
+            input.settings.validate(&input.privacy, true)?;
+            let metadata = input.youtube_metadata()?;
+            let parts = metadata
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(",");
+            let response = self
+                .0
+                .client
+                .post(&self.0.endpoints.upload)
+                .query(&[
+                    ("uploadType", "resumable"),
+                    ("part", parts.as_str()),
+                    (
+                        "notifySubscribers",
+                        if input.notify_subscribers {
+                            "true"
+                        } else {
+                            "false"
+                        },
+                    ),
+                ])
+                .bearer_auth(token)
+                .header("X-Upload-Content-Length", media.size)
+                .header("X-Upload-Content-Type", &media.mime)
+                .json(&metadata)
+                .send()
+                .await
+                .map_err(|_| {
+                    anyhow::anyhow!("Could not start YouTube upload. Check your network and retry.")
+                })?;
             if !response.status().is_success() {
                 if response.status().as_u16() == 401 {
                     *self.0.access_token.lock().await = None;
@@ -133,7 +162,7 @@ impl Publisher {
             }
             let _guard = self.0.mutation.lock().await;
             // Recheck account/policy before every chunk; disconnect does not leave a cached token running.
-            if input.privacy != "private"
+            if (input.privacy != "private" || input.settings.publish_at.is_some())
                 && self.setting("private_only").await?.as_deref() != Some("false")
             {
                 bail!("Private-only mode is enabled; this upload is paused");
