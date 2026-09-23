@@ -3,7 +3,12 @@ import { createRoot } from "react-dom/client";
 import { QueryClientProvider, type InfiniteData } from "@tanstack/react-query";
 import { Cable, Radio, Workflow, ScrollText, Settings } from "lucide-react";
 import { Snapshot, cache, request } from "./api";
-import { upsertConnection, type BridgeConnection } from "./activity";
+import {
+  upsertConnection,
+  upsertTransfer,
+  type BridgeConnection,
+  type MediaTransfer,
+} from "./activity";
 import { upsertPublication, type Publication } from "./publishing";
 import { Workspace, type Journal } from "./workspace";
 import "./style.css";
@@ -70,6 +75,20 @@ function App() {
               };
             },
           );
+        });
+        stream.addEventListener("media.transfer", (event) => {
+          const id = (
+            JSON.parse((event as MessageEvent).data) as { media_id: string }
+          ).media_id;
+          if (!id) return;
+          void request<MediaTransfer>(`/api/media-transfers/${id}`)
+            .then((transfer) => {
+              upsertTransfer(transfer);
+              void cache.invalidateQueries({
+                queryKey: ["media-transfer-history", id],
+              });
+            })
+            .catch(() => {});
         });
         stream.addEventListener("youtube.status", (event) => {
           const status = JSON.parse((event as MessageEvent).data);

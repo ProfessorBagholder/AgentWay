@@ -8,6 +8,8 @@ import {
   useYoutube,
   usePublications,
   usePublication,
+  useTransfers,
+  type MediaTransfer,
   type BridgeConnection,
 } from "./activity";
 import {
@@ -26,7 +28,7 @@ const states: Record<string, string> = {
 function Badge({ value }: { value: string }) {
   return (
     <span
-      className={`badge ${value === "Connected" || value === "Uploaded" ? "good" : value === "Needs attention" ? "warning" : ""}`}
+      className={`badge ${["Connected", "Uploaded", "Ready"].includes(value) ? "good" : value === "Needs attention" ? "warning" : ""}`}
     >
       {value}
     </span>
@@ -494,6 +496,29 @@ function Youtube() {
 }
 function Tasks({ filter }: { filter: string }) {
   const loaded = usePublications(filter);
+  const transfers = useTransfers();
+  const standalone =
+    transfers.data?.filter(
+      (t) =>
+        !t.has_publication &&
+        (filter === "all" ||
+          (filter === "attention" &&
+            ["checksum_mismatch", "interrupted"].includes(t.status)) ||
+          (filter === "complete" && t.status === "ready")),
+    ) ?? [];
+  const records = [
+    ...loaded.ids.map((id) => ({
+      kind: "publication" as const,
+      id,
+      created:
+        cache.getQueryData<Publication>(["publication", id])?.created_at ?? "",
+    })),
+    ...standalone.map((t) => ({
+      kind: "transfer" as const,
+      id: t.id,
+      created: t.created_at ?? "",
+    })),
+  ].sort((a, b) => b.created.localeCompare(a.created));
   return (
     <>
       <Heading title="Tasks" />
@@ -501,7 +526,7 @@ function Tasks({ filter }: { filter: string }) {
         {[
           ["all", "All tasks"],
           ["attention", "Needs attention"],
-          ["complete", "Uploaded"],
+          ["complete", "Completed"],
         ].map(([value, label]) => (
           <a
             key={value}
@@ -512,23 +537,114 @@ function Tasks({ filter }: { filter: string }) {
           </a>
         ))}
       </div>
-      {loaded.isPending ? (
+      {loaded.isPending || transfers.isPending ? (
         <Loading />
-      ) : loaded.error ? (
-        <ErrorMessage error={loaded.error} />
-      ) : loaded.ids.length ? (
+      ) : loaded.error || transfers.error ? (
+        <ErrorMessage error={loaded.error || transfers.error} />
+      ) : records.length ? (
         <section className="panel">
           <WorkTable kind="Task">
-            {loaded.ids.map((id) => (
-              <TaskRow key={id} id={id} filter={filter} />
-            ))}
+            {records.map((record) =>
+              record.kind === "publication" ? (
+                <TaskRow key={record.id} id={record.id} filter={filter} />
+              ) : (
+                <TransferTaskRow
+                  key={record.id}
+                  t={standalone.find((t) => t.id === record.id)!}
+                />
+              ),
+            )}
           </WorkTable>
+          {transfers.hasNextPage && (
+            <button
+              className="load-more"
+              disabled={transfers.isFetchingNextPage}
+              onClick={() => void transfers.fetchNextPage()}
+            >
+              Load more tasks
+            </button>
+          )}
         </section>
       ) : (
         <div className="empty">
           <h2>No tasks yet</h2>
         </div>
       )}
+    </>
+  );
+}
+function TransferTaskRow({ t }: { t: MediaTransfer }) {
+  return (
+    <tr>
+      <td data-label="Task">
+        <a href={`#/tasks/transfers/${t.id}`} className="work-title-link">
+          {transferTitle(t)}
+        </a>
+        {t.status === "receiving" && (
+          <progress
+            aria-label={`Transfer progress for ${transferTitle(t)}`}
+            value={t.offset}
+            max={t.size}
+          />
+        )}
+        {t.status === "checksum_mismatch" && (
+          <p className="error">File checksum did not match</p>
+        )}
+        {t.status === "interrupted" && (
+          <p className="error">{t.last_error || "Transfer interrupted"}</p>
+        )}
+      </td>
+      <TransferMetadata t={t} />
+    </tr>
+  );
+}
+function TransferDetail({ id }: { id: string }) {
+  const t = useQuery({
+    queryKey: ["media-transfer", id],
+    queryFn: () => request<MediaTransfer>(`/api/media-transfers/${id}`),
+  });
+  if (t.isPending) return <Loading />;
+  if (t.error) return <ErrorMessage error={t.error} />;
+  const row = t.data;
+  return (
+    <>
+      <Back to="tasks">Tasks</Back>
+      <Heading title={transferTitle(row)}>
+        <Badge value={transferStates[row.status]} />
+      </Heading>
+      <div className="narrow">
+        <section className="panel pad">
+          <dl>
+            <dt>Agent</dt>
+            <dd>{row.agent_name || "Not recorded"}</dd>
+            <dt>Transferred</dt>
+            <dd>
+              {row.offset.toLocaleString()} / {row.size.toLocaleString()} bytes
+            </dd>
+            <dt>Media ID</dt>
+            <dd>
+              <code>{row.id}</code>
+            </dd>
+          </dl>
+          {row.status === "checksum_mismatch" && (
+            <p className="error" role="alert">
+              File checksum did not match. Ask the agent to check its source
+              file and create a new transfer.
+            </p>
+          )}
+          {row.status === "interrupted" && (
+            <p className="error" role="alert">
+              {row.last_error || "Transfer interrupted"}. The agent can check
+              the saved offset and resume the same transfer.
+            </p>
+          )}
+          <div className="actions">
+            <a className="button" href={`#/activity?transfer=${id}`}>
+              View activity
+            </a>
+          </div>
+        </section>
+      </div>
     </>
   );
 }
@@ -569,20 +685,77 @@ function WorkTable({ kind, children }: { kind: string; children: ReactNode }) {
     </table>
   );
 }
-function WorkMetadata({ p }: { p: Publication }) {
+function WorkMetadata({
+  agent,
+  platform,
+  created,
+  status,
+}: {
+  agent: string | null | undefined;
+  platform: string;
+  created: string | null;
+  status: string;
+}) {
   return (
     <>
-      <td data-label="Agent">{p.agent_name || "Not recorded"}</td>
-      <td data-label="Platform">YouTube</td>
+      <td data-label="Agent">{agent || "Not recorded"}</td>
+      <td data-label="Platform">{platform}</td>
       <td data-label="Created">
-        <time dateTime={p.created_at}>
-          {new Date(p.created_at).toLocaleString()}
-        </time>
+        {created ? (
+          <time dateTime={created}>{new Date(created).toLocaleString()}</time>
+        ) : (
+          "—"
+        )}
       </td>
       <td data-label="Status">
-        <Badge value={states[p.status]} />
+        <Badge value={status} />
       </td>
     </>
+  );
+}
+function PublicationMetadata({ p }: { p: Publication }) {
+  return (
+    <WorkMetadata
+      agent={p.agent_name}
+      platform="YouTube"
+      created={p.created_at}
+      status={states[p.status]}
+    />
+  );
+}
+const transferStates: Record<MediaTransfer["status"], string> = {
+  receiving: "Receiving",
+  ready: "Ready",
+  checksum_mismatch: "Needs attention",
+  interrupted: "Needs attention",
+  cancelling: "Cancelling",
+  cancelled: "Cancelled",
+  expiring: "Expiring",
+  expired: "Expired",
+};
+function transferTitle(t: MediaTransfer) {
+  const kind = t.mime.startsWith("video/")
+    ? "Video"
+    : t.mime.startsWith("image/")
+      ? "Image"
+      : "File";
+  if (t.size < 1024)
+    return `${kind} transfer · ${t.size.toLocaleString()} bytes`;
+  const unit = t.size >= 1024 * 1024 ? "MiB" : "KiB";
+  const divisor = unit === "MiB" ? 1024 * 1024 : 1024;
+  const amount = new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 1,
+  }).format(t.size / divisor);
+  return `${kind} transfer · ${amount} ${unit}`;
+}
+function TransferMetadata({ t }: { t: MediaTransfer }) {
+  return (
+    <WorkMetadata
+      agent={t.agent_name}
+      platform="—"
+      created={t.created_at}
+      status={transferStates[t.status]}
+    />
   );
 }
 function TaskRow({ id, filter }: { id: string; filter: string }) {
@@ -613,7 +786,7 @@ function TaskRow({ id, filter }: { id: string; filter: string }) {
           </div>
         )}
       </td>
-      <WorkMetadata p={p} />
+      <PublicationMetadata p={p} />
     </tr>
   );
 }
@@ -869,12 +1042,76 @@ function TaskDetail({ id }: { id: string }) {
   );
 }
 export interface Journal {
+  media_id?: string | null;
   items: {
     sequence: number;
     event_at?: string | null;
     publication: Publication;
   }[];
   next: number | null;
+}
+interface TransferJournal {
+  items: {
+    sequence: number;
+    event_at?: string;
+    status: string;
+    offset?: number;
+    size?: number;
+    error?: string | null;
+  }[];
+  next: number | null;
+}
+function TransferSteps({ id }: { id: string }) {
+  const h = useInfiniteQuery({
+    queryKey: ["media-transfer-history", id],
+    initialPageParam: 0,
+    queryFn: ({ pageParam }) =>
+      request<TransferJournal>(
+        `/api/media-transfers/${id}/history?after=${pageParam}`,
+      ),
+    getNextPageParam: (last) => last.next ?? undefined,
+  });
+  if (h.isPending) return <Loading />;
+  if (h.error) return <ErrorMessage error={h.error} />;
+  return (
+    <div className="journal">
+      <ol>
+        {h.data.pages
+          .flatMap((page) => page.items)
+          .map((step) => (
+            <li key={step.sequence}>
+              {step.event_at && (
+                <time dateTime={step.event_at}>
+                  {new Date(step.event_at).toLocaleString()}
+                </time>
+              )}
+              <strong>
+                {transferStates[step.status as MediaTransfer["status"]] ??
+                  (step.status === "reserved" ? "Reserved" : step.status)}
+              </strong>
+              {step.size != null && step.offset != null && (
+                <span>
+                  {step.offset.toLocaleString()} / {step.size.toLocaleString()}{" "}
+                  bytes
+                </span>
+              )}
+              {step.status === "checksum_mismatch" && (
+                <p className="error">File checksum did not match</p>
+              )}
+              {step.error && <p className="error">{step.error}</p>}
+            </li>
+          ))}
+      </ol>
+      {h.hasNextPage && (
+        <button
+          disabled={h.isFetchingNextPage}
+          onClick={() => void h.fetchNextPage()}
+        >
+          Load more steps
+        </button>
+      )}
+    </div>
+  );
 }
 function JournalSteps({ id }: { id: string }) {
   const h = useInfiniteQuery({
@@ -888,6 +1125,9 @@ function JournalSteps({ id }: { id: string }) {
   if (h.error) return <ErrorMessage error={h.error} />;
   return (
     <div className="journal">
+      {h.data.pages[0].media_id && (
+        <TransferSteps id={h.data.pages[0].media_id} />
+      )}
       <ol>
         {h.data.pages
           .flatMap((p) => p.items)
@@ -920,6 +1160,38 @@ function JournalSteps({ id }: { id: string }) {
     </div>
   );
 }
+function TransferActivityItem({ t }: { t: MediaTransfer }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <tr className={open ? "work-expanded" : ""}>
+        <td data-label="Activity">
+          <button
+            className="work-expand"
+            aria-expanded={open}
+            aria-controls={`transfer-history-${t.id}`}
+            onClick={() => setOpen(!open)}
+          >
+            <ChevronRight size={16} aria-hidden="true" />
+            <span>
+              <span className="work-title-link">{transferTitle(t)}</span>
+              <span className="work-operation">Transfer media</span>
+            </span>
+          </button>
+        </td>
+        <TransferMetadata t={t} />
+      </tr>
+      {open && (
+        <tr className="work-history" id={`transfer-history-${t.id}`}>
+          <td colSpan={5}>
+            <TransferSteps id={t.id} />
+            <a href={`#/tasks/transfers/${t.id}`}>View task</a>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
 function ActivityItem({ id, errorsOnly }: { id: string; errorsOnly: boolean }) {
   const { data: p } = usePublication(id);
   const [open, setOpen] = useState(false);
@@ -941,7 +1213,7 @@ function ActivityItem({ id, errorsOnly }: { id: string; errorsOnly: boolean }) {
             </span>
           </button>
         </td>
-        <WorkMetadata p={p} />
+        <PublicationMetadata p={p} />
       </tr>
       {open && (
         <tr className="work-history" id={`history-${id}`}>
@@ -955,44 +1227,98 @@ function ActivityItem({ id, errorsOnly }: { id: string; errorsOnly: boolean }) {
 }
 function Activity({
   task,
+  transfer,
   errorsOnly,
 }: {
   task: string | null;
+  transfer: string | null;
   errorsOnly: boolean;
 }) {
   const loaded = usePublications();
+  const transfers = useTransfers();
+  const standalone =
+    transfers.data?.filter(
+      (t) =>
+        !t.has_publication &&
+        (!transfer || t.id === transfer) &&
+        (!errorsOnly ||
+          ["checksum_mismatch", "interrupted"].includes(t.status)),
+    ) ?? [];
+  const rows = [
+    ...(transfer
+      ? []
+      : loaded.ids
+          .filter((id) => !task || task === id)
+          .map((id) => ({
+            kind: "publication" as const,
+            id,
+            created:
+              cache.getQueryData<Publication>(["publication", id])
+                ?.created_at ?? "",
+          }))),
+    ...(task
+      ? []
+      : standalone.map((t) => ({
+          kind: "transfer" as const,
+          id: t.id,
+          created: t.created_at ?? "",
+        }))),
+  ].sort((a, b) => b.created.localeCompare(a.created));
+  const suffix = task
+    ? `&task=${task}`
+    : transfer
+      ? `&transfer=${transfer}`
+      : "";
   return (
     <>
       <Heading title="Activity log" />
       <div className="toolbar">
         <a
           className={!errorsOnly ? "selected" : ""}
-          href={`#/activity${task ? `?task=${task}` : ""}`}
+          href={`#/activity${suffix ? `?${suffix.slice(1)}` : ""}`}
         >
           All activity
         </a>
         <a
           className={errorsOnly ? "selected" : ""}
-          href={`#/activity?errors=1${task ? `&task=${task}` : ""}`}
+          href={`#/activity?errors=1${suffix}`}
         >
           Needs attention
         </a>
-        {task && <a href="#/activity">Clear task filter</a>}
+        {(task || transfer) && <a href="#/activity">Clear task filter</a>}
       </div>
-      {loaded.isPending ? (
+      {loaded.isPending || transfers.isPending ? (
         <Loading />
-      ) : loaded.error ? (
-        <ErrorMessage error={loaded.error} />
+      ) : loaded.error || transfers.error ? (
+        <ErrorMessage error={loaded.error || transfers.error} />
       ) : (
         <section className="panel">
           <WorkTable kind="Activity">
-            {(task ? loaded.ids.filter((id) => id === task) : loaded.ids).map(
-              (id) => (
-                <ActivityItem key={id} id={id} errorsOnly={errorsOnly} />
+            {rows.map((row) =>
+              row.kind === "publication" ? (
+                <ActivityItem
+                  key={row.id}
+                  id={row.id}
+                  errorsOnly={errorsOnly}
+                />
+              ) : (
+                <TransferActivityItem
+                  key={row.id}
+                  t={standalone.find((t) => t.id === row.id)!}
+                />
               ),
             )}
           </WorkTable>
-          {!loaded.ids.length && (
+          {transfers.hasNextPage && (
+            <button
+              className="load-more"
+              disabled={transfers.isFetchingNextPage}
+              onClick={() => void transfers.fetchNextPage()}
+            >
+              Load more activity
+            </button>
+          )}
+          {!rows.length && (
             <div className="empty">
               <h2>No activity yet</h2>
             </div>
@@ -1137,12 +1463,15 @@ export function Workspace({ route }: { route: string }) {
   if (path === "platforms/youtube" || path === "platforms/connect")
     return <Youtube />;
   if (path === "tasks") return <Tasks filter={query.get("state") || "all"} />;
+  if (path.startsWith("tasks/transfers/"))
+    return <TransferDetail key={path} id={path.split("/")[2]} />;
   if (path.startsWith("tasks/"))
     return <TaskDetail key={path} id={path.split("/")[1]} />;
   if (path === "activity")
     return (
       <Activity
         task={query.get("task")}
+        transfer={query.get("transfer")}
         errorsOnly={query.get("errors") === "1"}
       />
     );

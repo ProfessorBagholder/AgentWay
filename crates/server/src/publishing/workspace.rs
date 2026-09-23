@@ -69,6 +69,15 @@ async fn history(
     Query(q): Query<HistoryQuery>,
 ) -> Api<Value> {
     p.publication(&id).await?;
+    let media_id: String = sqlx::query_scalar("SELECT media_id FROM publications WHERE id=?")
+        .bind(&id)
+        .fetch_one(&p.0.db)
+        .await?;
+    let has_transfer: i64 =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM media_uploads WHERE media_id=?)")
+            .bind(&media_id)
+            .fetch_one(&p.0.db)
+            .await?;
     let rows: Vec<(i64,String)> = sqlx::query_as("SELECT sequence,payload FROM events WHERE kind='publication.upsert' AND json_extract(payload,'$.id')=? AND sequence>? ORDER BY sequence LIMIT 201")
         .bind(&id).bind(q.after.unwrap_or(0).max(0)).fetch_all(&p.0.db).await?;
     let more = rows.len() > 200;
@@ -86,7 +95,7 @@ async fn history(
         None
     };
     Ok(Json(
-        json!({"items":items,"next":next,"video_operations":p.video_operations(&id).await?}),
+        json!({"items":items,"next":next,"media_id":if has_transfer!=0 {Some(media_id)} else {None},"video_operations":p.video_operations(&id).await?}),
     ))
 }
 async fn visibility(

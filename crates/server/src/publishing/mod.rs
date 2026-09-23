@@ -10,6 +10,7 @@ mod podcast;
 mod settings;
 #[cfg(test)]
 mod tests;
+mod transfer_activity;
 mod transfers;
 mod vault;
 mod video;

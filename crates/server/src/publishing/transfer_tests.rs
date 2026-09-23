@@ -70,6 +70,7 @@ async fn fixture() -> (tempfile::TempDir, Publisher) {
         tokio::io::AsyncWriteExt::write_all(&mut file, &bytes)
             .await
             .unwrap();
+        tokio::io::AsyncWriteExt::flush(&mut file).await.unwrap();
         (
             StatusCode::NO_CONTENT,
             [("upload-offset", (offset + bytes.len() as u64).to_string())],
@@ -134,6 +135,97 @@ async fn tus_request(
 }
 fn checksum(data: &[u8]) -> String {
     format!("sha256 {}", STANDARD.encode(Sha256::digest(data)))
+}
+
+#[tokio::test]
+async fn owner_activity_tracks_progress_failure_and_recovery_without_secrets() {
+    let (_dir, mut p) = fixture().await;
+    let upload = p
+        .create_resumable_upload(reservation(b"abcdefgh"))
+        .await
+        .unwrap();
+    let id = upload["media_id"].as_str().unwrap().to_owned();
+    let (status, list) = super::admin(&p, "GET", "/api/media-transfers", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(list["items"][0]["id"], id);
+    assert_eq!(list["items"][0]["offset"], 0);
+    assert!(list["next"].is_null());
+    let original = p.0.tus_url.clone();
+    Arc::get_mut(&mut p.0).unwrap().tus_url = Some("http://127.0.0.1:1".into());
+    let failure = tus_request(
+        &p,
+        &id,
+        "PATCH",
+        0,
+        b"abcd".to_vec(),
+        Some(checksum(b"abcd")),
+    )
+    .await;
+    assert_eq!(failure.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let (_, detail) =
+        super::admin(&p, "GET", &format!("/api/media-transfers/{id}"), json!({})).await;
+    assert_eq!(detail["status"], "interrupted");
+    assert_eq!(detail["offset"], 0);
+    assert_eq!(detail["last_error"], "media_transport_unavailable");
+    Arc::get_mut(&mut p.0).unwrap().tus_url = original;
+    let restored = tus_request(
+        &p,
+        &id,
+        "PATCH",
+        0,
+        b"abcd".to_vec(),
+        Some(checksum(b"abcd")),
+    )
+    .await;
+    assert_eq!(restored.status(), StatusCode::NO_CONTENT);
+    let (_, detail) =
+        super::admin(&p, "GET", &format!("/api/media-transfers/{id}"), json!({})).await;
+    assert_eq!(detail["status"], "receiving");
+    assert_eq!(detail["offset"], 4);
+    assert!(detail["last_error"].is_null());
+    let (_, history) = super::admin(
+        &p,
+        "GET",
+        &format!("/api/media-transfers/{id}/history"),
+        json!({}),
+    )
+    .await;
+    let steps = history["items"].as_array().unwrap();
+    assert_eq!(steps.len(), 3);
+    assert_eq!(steps[0]["status"], "reserved");
+    assert_eq!(steps[1]["error"], "media_transport_unavailable");
+    assert_eq!(steps[2]["offset"], 4);
+    assert!(steps.iter().all(|step| step["event_at"].is_string()));
+    assert!(!history.to_string().contains("Bearer"));
+}
+
+#[tokio::test]
+async fn owner_transfer_activity_can_reach_older_records() {
+    let (_dir, p) = fixture().await;
+    for _ in 0..101 {
+        sqlx::query("INSERT INTO media_uploads(media_id,agent_id,request_id,size,mime,sha256,created_at) VALUES(?,?,?,?,?,?,'2026-09-23T00:00:00Z')")
+            .bind(Uuid::new_v4().to_string())
+            .bind(p.connection_id())
+            .bind(Uuid::new_v4().to_string())
+            .bind(1_i64)
+            .bind("video/mp4")
+            .bind("0".repeat(64))
+            .execute(&p.0.db)
+            .await
+            .unwrap();
+    }
+    let (_, first) = super::admin(&p, "GET", "/api/media-transfers", json!({})).await;
+    assert_eq!(first["items"].as_array().unwrap().len(), 100);
+    let cursor = first["next"].as_i64().unwrap();
+    let (_, second) = super::admin(
+        &p,
+        "GET",
+        &format!("/api/media-transfers?before={cursor}"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(second["items"].as_array().unwrap().len(), 1);
+    assert!(second["next"].is_null());
 }
 
 #[tokio::test]
