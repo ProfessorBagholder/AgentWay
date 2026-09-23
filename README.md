@@ -4,6 +4,10 @@ A personal bridge between the AI agents you already use and the places you publi
 
 **Status: Muse-to-YouTube publishing verified for private and public uploads.** The working interface includes Agents, Platforms, Tasks, Activity log and Settings. Configure YouTube in Platforms, obtain agent instructions in Agents, and inspect real uploads and submitted video settings in Tasks. Activity log displays recorded upload steps and errors. The app still has one shared agent connection and one YouTube account; independent agent enrollment, cross-agent execution, quota-aware delegation and other publishing platforms remain unimplemented. The reference prototype under `docs/design` is not served by the app.
 
+## Development instructions
+
+Coding agents and contributors must read [AGENTS.md](AGENTS.md) before making changes. For every UI change, follow [the UI system](docs/design/ui-system.md) before implementation and complete its visual/interaction review before delivery. Reuse the documented components and tokens; do not treat existing inconsistencies as design precedents.
+
 ## Run locally
 
 Prerequisite: Docker with Compose installed and the container engine running.

@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useInfiniteQuery, useMutation, useQuery } from "@tanstack/react-query";
-import { Moon, Sun, ArrowLeft, ExternalLink } from "lucide-react";
+import { Moon, Sun, ArrowLeft, ExternalLink, ChevronRight } from "lucide-react";
 import { cache, request } from "./api";
 import {
   useConnection,
@@ -404,10 +404,12 @@ function Tasks({ filter }: { filter: string }) {
       ) : loaded.error ? (
         <ErrorMessage error={loaded.error} />
       ) : loaded.ids.length ? (
-        <section className="panel task-list">
-          {loaded.ids.map((id) => (
-            <TaskRow key={id} id={id} filter={filter} />
-          ))}
+        <section className="panel">
+          <WorkTable kind="Task">
+            {loaded.ids.map((id) => (
+              <TaskRow key={id} id={id} filter={filter} />
+            ))}
+          </WorkTable>
         </section>
       ) : (
         <div className="empty">
@@ -431,6 +433,45 @@ function Retry({ id }: { id: string }) {
     </>
   );
 }
+function WorkTable({ kind, children }: { kind: string; children: ReactNode }) {
+  return (
+    <table className="work-table">
+      <colgroup>
+        <col className="work-title" />
+        <col />
+        <col />
+        <col className="work-date" />
+        <col />
+      </colgroup>
+      <thead>
+        <tr>
+          {[kind, "Agent", "Platform", "Created", "Status"].map((label) => (
+            <th key={label} scope="col">
+              {label}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>{children}</tbody>
+    </table>
+  );
+}
+function WorkMetadata({ p }: { p: Publication }) {
+  return (
+    <>
+      <td data-label="Agent">{p.agent_name || "Not recorded"}</td>
+      <td data-label="Platform">YouTube</td>
+      <td data-label="Created">
+        <time dateTime={p.created_at}>
+          {new Date(p.created_at).toLocaleString()}
+        </time>
+      </td>
+      <td data-label="Status">
+        <Badge value={states[p.status]} />
+      </td>
+    </>
+  );
+}
 function TaskRow({ id, filter }: { id: string; filter: string }) {
   const { data: p } = usePublication(id);
   if (
@@ -440,26 +481,27 @@ function TaskRow({ id, filter }: { id: string; filter: string }) {
   )
     return null;
   return (
-    <article className="task-row">
-      <div>
-        <a href={`#/tasks/${id}`}>
-          <strong>{p.title}</strong>
+    <tr>
+      <td data-label="Task">
+        <a href={`#/tasks/${id}`} className="work-title-link">
+          {p.title}
         </a>
-        <time dateTime={p.created_at}>
-          {new Date(p.created_at).toLocaleString()}
-        </time>
         {p.status === "uploading" && (
           <progress
             aria-label={`Upload progress for ${p.title}`}
             value={p.uploaded_bytes}
             max={p.total_bytes}
           />
-        )}{" "}
+        )}
         {p.error && <p className="error">{p.error}</p>}
-      </div>
-      <Badge value={states[p.status]} />
-      {p.status === "interrupted" && <Retry id={id} />}
-    </article>
+        {p.status === "interrupted" && (
+          <div className="work-retry">
+            <Retry id={id} />
+          </div>
+        )}
+      </td>
+      <WorkMetadata p={p} />
+    </tr>
   );
 }
 interface Detail {
@@ -502,6 +544,8 @@ function TaskDetail({ id }: { id: string }) {
       <div className="narrow stack">
         <section className="panel pad">
           <dl>
+            <dt>Agent</dt>
+            <dd>{p.agent_name || "Not recorded"}</dd>
             <dt>Platform</dt>
             <dd>YouTube</dd>
             <dt>Created</dt>
@@ -634,38 +678,35 @@ function JournalSteps({ id }: { id: string }) {
 }
 function ActivityItem({ id, errorsOnly }: { id: string; errorsOnly: boolean }) {
   const { data: p } = usePublication(id);
-  // Opened chains stay mounted during updates; filtering uses current recoverable failures.
+  const [open, setOpen] = useState(false);
   if (!p || (errorsOnly && p.status !== "interrupted")) return null;
   return (
-    <details className="operation">
-      <summary>
-        <div>
-          <strong>Upload video</strong>
-          <span>{p.title}</span>
-        </div>
-        <span>YouTube</span>
-        <time dateTime={p.created_at}>
-          {new Date(p.created_at).toLocaleString()}
-        </time>
-        <Badge value={states[p.status]} />
-      </summary>
-      <JournalOnOpen id={id} />
-    </details>
-  );
-}
-function JournalOnOpen({ id }: { id: string }) {
-  // Lazy history fetch uses native details' toggle event through a small observer component.
-  const [opened, setOpened] = useState(false);
-  return (
-    <div
-      ref={(node) => {
-        if (!node) return;
-        const parent = node.parentElement as HTMLDetailsElement;
-        parent.ontoggle = () => setOpened(parent.open);
-      }}
-    >
-      {opened && <JournalSteps id={id} />}
-    </div>
+    <>
+      <tr className={open ? "work-expanded" : ""}>
+        <td data-label="Activity">
+          <button
+            className="work-expand"
+            aria-expanded={open}
+            aria-controls={`history-${id}`}
+            onClick={() => setOpen(!open)}
+          >
+            <ChevronRight size={16} aria-hidden="true" />
+            <span>
+              <span className="work-title-link">{p.title}</span>
+              <span className="work-operation">Upload video</span>
+            </span>
+          </button>
+        </td>
+        <WorkMetadata p={p} />
+      </tr>
+      {open && (
+        <tr className="work-history" id={`history-${id}`}>
+          <td colSpan={5}>
+            <JournalSteps id={id} />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 function Activity({
@@ -700,11 +741,13 @@ function Activity({
         <ErrorMessage error={loaded.error} />
       ) : (
         <section className="panel">
-          {(task ? loaded.ids.filter((id) => id === task) : loaded.ids).map(
-            (id) => (
-              <ActivityItem key={id} id={id} errorsOnly={errorsOnly} />
-            ),
-          )}
+          <WorkTable kind="Activity">
+            {(task ? loaded.ids.filter((id) => id === task) : loaded.ids).map(
+              (id) => (
+                <ActivityItem key={id} id={id} errorsOnly={errorsOnly} />
+              ),
+            )}
+          </WorkTable>
           {!loaded.ids.length && (
             <div className="empty">
               <h2>No activity yet</h2>
@@ -719,52 +762,57 @@ function SettingsPage() {
   const [theme, setTheme] = useState(
     document.documentElement.dataset.theme || "dark",
   );
+  const [address, setAddress] = useState<string | null>(null);
   const y = useYoutube();
   const save = useMutation({
     mutationFn: (url: string) =>
       request<YoutubeStatus>("/api/publishing/bridge", { url }),
-    onSuccess: (s) => cache.setQueryData(["youtube"], s),
+    onSuccess: (s) => {
+      cache.setQueryData(["youtube"], s);
+      setAddress(null);
+    },
   });
   const policy = useMutation({
     mutationFn: (private_only: boolean) =>
       request<YoutubeStatus>("/api/youtube/policy", { private_only }),
     onSuccess: (s) => cache.setQueryData(["youtube"], s),
   });
+  const value = address ?? y.data?.bridge_url ?? "";
+  const dirty = value.trim() !== (y.data?.bridge_url ?? "");
   return (
     <>
       <Heading title="Settings" />
-      <div className="narrow stack">
-        <section className="panel">
-          <div className="panel-title">
-            <h2>Appearance</h2>
-          </div>
-          <fieldset className="pad theme-options">
+      <div className="settings-list">
+        <section className="setting-row" aria-labelledby="appearance-label">
+          <h2 id="appearance-label">Appearance</h2>
+          <fieldset className="settings-theme">
             <legend className="sr-only">Theme</legend>
-            {[
-              ["light", "Light", Sun],
-              ["dark", "Dark", Moon],
-            ].map(([value, label, Icon]) => {
-              const Symbol = Icon as typeof Sun;
-              return (
-                <label key={value as string} className="theme-choice">
-                  <input
-                    type="radio"
-                    name="theme"
-                    checked={theme === value}
-                    onChange={() => {
-                      const v = value as string;
-                      document.documentElement.dataset.theme = v;
-                      try {
-                        localStorage.setItem("agentway-theme", v);
-                      } catch {}
-                      setTheme(v);
-                    }}
-                  />
-                  <Symbol size={20} />
-                  {label as string}
-                </label>
-              );
-            })}
+            {(
+              [
+                ["light", "Light", Sun],
+                ["dark", "Dark", Moon],
+              ] as const
+            ).map(([value, label, Icon]) => (
+              <label key={value}>
+                <input
+                  className="sr-only"
+                  type="radio"
+                  name="theme"
+                  checked={theme === value}
+                  onChange={() => {
+                    document.documentElement.dataset.theme = value;
+                    try {
+                      localStorage.setItem("agentway-theme", value);
+                    } catch {}
+                    setTheme(value);
+                  }}
+                />
+                <span>
+                  <Icon size={16} aria-hidden="true" />
+                  {label}
+                </span>
+              </label>
+            ))}
           </fieldset>
         </section>
         {y.isPending ? (
@@ -773,48 +821,58 @@ function SettingsPage() {
           <ErrorMessage error={y.error} />
         ) : (
           <>
-            <section className="panel">
-              <div className="panel-title">
-                <h2>Agent endpoint</h2>
-              </div>
+            <section className="setting-row">
+              <h2>
+                <label htmlFor="agent-address">Agent endpoint</label>
+              </h2>
               <form
-                className="pad"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  save.mutate(
-                    String(new FormData(e.currentTarget).get("url") ?? ""),
-                  );
+                  if (dirty) save.mutate(value.trim());
                 }}
               >
-                <label>
-                  Public HTTPS address
+                <div className="settings-address">
                   <input
+                    id="agent-address"
                     name="url"
                     type="url"
-                    defaultValue={y.data.bridge_url}
+                    aria-label="Agent endpoint"
+                    value={value}
+                    disabled={save.isPending}
+                    onChange={(e) => {
+                      setAddress(e.target.value);
+                      save.reset();
+                    }}
                   />
-                </label>
-                <div className="actions">
-                  <button disabled={save.isPending}>Save address</button>
-                  {save.isSuccess && <span role="status">Saved</span>}
+                  <button disabled={!dirty || save.isPending}>
+                    {save.isPending ? "Saving…" : "Save"}
+                  </button>
                 </div>
+                {save.isSuccess && (
+                  <span className="setting-feedback" role="status">
+                    Saved
+                  </span>
+                )}
                 <ErrorMessage error={save.error} />
               </form>
             </section>
-            <section className="panel">
-              <div className="panel-title">
-                <h2>Publishing restrictions</h2>
-              </div>
-              <div className="pad">
-                <label className="check">
+            <section className="setting-row">
+              <h2>YouTube</h2>
+              <div>
+                <label className="settings-check">
                   <input
                     type="checkbox"
                     checked={y.data.private_only}
                     disabled={policy.isPending}
                     onChange={(e) => policy.mutate(e.target.checked)}
                   />
-                  Restrict uploads to private
+                  Restrict all agent uploads to private
                 </label>
+                {policy.isPending && (
+                  <span className="setting-feedback" role="status">
+                    Saving…
+                  </span>
+                )}
                 <ErrorMessage error={policy.error} />
               </div>
             </section>

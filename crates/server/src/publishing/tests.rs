@@ -1439,3 +1439,22 @@ async fn channel_description_preserves_settings_and_reconciles_uncertain_writes(
     assert_eq!(writes.load(Ordering::SeqCst), 3);
     server.abort();
 }
+
+#[tokio::test]
+async fn publication_keeps_submitting_connection_name() {
+    let (_dir, p) = fixture().await;
+    account(&p).await;
+    p.set("agent_connection_name", "Muse").await.unwrap();
+    let m = media(&p).await;
+    let publication = p.enqueue(input(m)).await.unwrap();
+    assert_eq!(publication.agent_name.as_deref(), Some("Muse"));
+    p.set("agent_connection_name", "Claude").await.unwrap();
+    assert_eq!(
+        p.publication(&publication.id)
+            .await
+            .unwrap()
+            .agent_name
+            .as_deref(),
+        Some("Muse")
+    );
+}

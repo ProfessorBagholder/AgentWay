@@ -61,6 +61,8 @@ impl Default for Endpoints {
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Publication {
     #[serde(default)]
+    pub agent_name: Option<String>,
+    #[serde(default)]
     pub deleted_at: Option<String>,
     pub id: String,
     pub title: String,
@@ -397,8 +399,9 @@ impl Publisher {
             .await?
             .ok_or_else(|| anyhow::anyhow!("Upload the complete media file first"))?;
         let id = Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO publications(id,request_id,input,channel_id,media_id,title,total_bytes) VALUES(?,?,?,?,?,?,?)")
-            .bind(&id).bind(&input.request_id).bind(encoded).bind(channel).bind(&media.id).bind(&input.title).bind(media.size).execute(&self.0.db).await?;
+        let agent_name = self.setting("agent_connection_name").await?;
+        sqlx::query("INSERT INTO publications(id,request_id,input,channel_id,media_id,title,total_bytes,agent_name) VALUES(?,?,?,?,?,?,?,?)")
+            .bind(&id).bind(&input.request_id).bind(encoded).bind(channel).bind(&media.id).bind(&input.title).bind(media.size).bind(agent_name).execute(&self.0.db).await?;
         self.publish_event(&id).await?;
         self.0.wake.notify_one();
         self.publication(&id).await

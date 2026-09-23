@@ -10,6 +10,7 @@ export interface YoutubeStatus {
   bridge_url: string;
 }
 export interface Publication {
+  agent_name?: string | null;
   id: string;
   title: string;
   status: "queued" | "uploading" | "uploaded" | "interrupted";

@@ -1,5 +1,7 @@
 # AgentWay development
 
+- Before implementing any UI change, read `docs/design/ui-system.md` and inspect the existing affected and related screens. Design-system consistency, conventional interaction, spacing, alignment, responsive behavior and all control states are mandatory inputs to implementation, not optional polish after user review. Reuse shared components/tokens; do not create inconsistent variants. Perform the document's visual and interaction checks before presenting work. Do not delegate this quality control to the user.
+
 - Work in `~/dev/AgentWay`. Do not use `~/Documents` for this project.
 - AgentWay connects users' existing agents to services and to one another. It does not host models or create content itself.
 - Treat Muse, Grok Bot, ChatGPT agents and Claude agents as distinct products. Verify their actual connector capabilities; do not substitute coding products or model APIs.
