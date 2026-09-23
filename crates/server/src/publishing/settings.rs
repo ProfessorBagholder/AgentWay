@@ -306,6 +306,20 @@ fn matches(body: &Value, item: &Value) -> bool {
             return item[part] == *fields || (fields == &json!({}) && item[part].is_null());
         }
         fields.as_object().unwrap().iter().all(|(key, value)| {
+            if part == "snippet" && key == "tags" {
+                // YouTube can reorder tags. Preserve multiplicity but ignore order.
+                let sorted = |v: &Value| -> Option<Vec<String>> {
+                    let mut values = v
+                        .as_array()?
+                        .iter()
+                        .map(|v| v.as_str().map(str::to_owned))
+                        .collect::<Option<Vec<_>>>()?;
+                    values.sort_unstable();
+                    Some(values)
+                };
+                return (value == &json!([]) && item[part][key].is_null())
+                    || (sorted(value).is_some() && sorted(value) == sorted(&item[part][key]));
+            }
             if ["publishAt", "recordingDate"].contains(&key.as_str()) {
                 let parse = |v: &Value| {
                     v.as_str()
@@ -425,9 +439,16 @@ impl Publisher {
                 }
             }
         }
-        self.settings_operation(id).await
+        self.saved_settings_operation(id).await
     }
     pub async fn settings_operation(&self, id: &str) -> Result<Value> {
+        let _guard = self.0.mutation.lock().await;
+        self.check_publish_access().await?;
+        // Authorize the record before making any provider request or changing it.
+        self.saved_settings_operation(id).await?;
+        self.reconcile_settings(id).await
+    }
+    async fn saved_settings_operation(&self, id: &str) -> Result<Value> {
         let (publication,owner,status,error):(String,String,String,Option<String>)=sqlx::query_as("SELECT publication_id,agent_id,status,error FROM youtube_settings_operations WHERE request_id=?").bind(id).fetch_one(&self.0.db).await?;
         if self.1.is_some() && owner != self.connection_id() {
             bail!("Operation belongs to another connection");
@@ -452,6 +473,27 @@ pub(super) async fn provider_error(action: &str, response: reqwest::Response) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tag_readback_ignores_order_but_detects_changed_values() {
+        let desired = json!({"snippet":{"tags":["agentway","v12-test","updated"]}});
+        assert!(matches(
+            &desired,
+            &json!({"snippet":{"tags":["agentway","updated","v12-test"]}})
+        ));
+        assert!(!matches(
+            &desired,
+            &json!({"snippet":{"tags":["agentway","updated"]}})
+        ));
+        assert!(!matches(
+            &desired,
+            &json!({"snippet":{"tags":["agentway","updated","other"]}})
+        ));
+        assert!(!matches(&desired, &json!({"snippet":{}})));
+        assert!(!matches(
+            &json!({"status":{"containsSyntheticMedia":true}}),
+            &json!({"status":{}})
+        ));
+    }
     #[test]
     fn schedule_cancellation_preserves_disclosures_and_snippet_edits_preserve_translations() {
         let item = json!({"id":"v","snippet":{"title":"Title","description":"Description","categoryId":"27","tags":["existing"]},"status":{"privacyStatus":"private","publishAt":"2099-01-01T00:00:00Z","license":"creativeCommon","containsSyntheticMedia":true,"selfDeclaredMadeForKids":false,"embeddable":false},"localizations":{"fr":{"title":"Titre","description":"Texte"}}});

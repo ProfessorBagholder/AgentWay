@@ -193,6 +193,9 @@ impl Publisher {
                     .client
                     .post(&self.0.endpoints.thumbnails)
                     .query(&[("videoId", video), ("uploadType", "resumable")])
+                    // No metadata body: Google still requires an explicit length.
+                    .header(reqwest::header::CONTENT_LENGTH, 0)
+                    .body(Vec::<u8>::new())
             }
             AssetAction::SetCaption => {
                 if !["text/vtt", "application/x-subrip"].contains(&mime.as_str()) {

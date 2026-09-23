@@ -2006,7 +2006,7 @@ async fn settings_preserve_provider_fields_reconcile_restart_and_reject_stale_or
         .await
         .unwrap();
     let item = Arc::new(std::sync::Mutex::new(
-        json!({"id":"video","etag":"v1","snippet":{"channelId":"channel","title":"Original","description":"Keep description","categoryId":"27","tags":["keep"],"defaultLanguage":"en"},"status":{"privacyStatus":"private","embeddable":false,"license":"creativeCommon","selfDeclaredMadeForKids":false,"containsSyntheticMedia":true,"uploadStatus":"processed"},"localizations":{"fr":{"title":"Titre","description":"Texte"}}}),
+        json!({"id":"video","etag":"v1","snippet":{"channelId":"channel","title":"Original","description":"Keep description","categoryId":"27","tags":["keep", "second"],"defaultLanguage":"en"},"status":{"privacyStatus":"private","embeddable":false,"license":"creativeCommon","selfDeclaredMadeForKids":false,"containsSyntheticMedia":true,"uploadStatus":"processed"},"localizations":{"fr":{"title":"Titre","description":"Texte"}}}),
     ));
     let desired = Arc::new(std::sync::Mutex::new(None::<Value>));
     let writes = Arc::new(AtomicUsize::new(0));
@@ -2036,7 +2036,7 @@ async fn settings_preserve_provider_fields_reconcile_restart_and_reject_stale_or
                         assert_eq!(headers["if-match"], "v1");
                         assert_eq!(body["snippet"]["description"], "Keep description");
                         assert_eq!(body["snippet"]["categoryId"], "27");
-                        assert_eq!(body["snippet"]["tags"], json!(["keep"]));
+                        assert_eq!(body["snippet"]["tags"], json!(["keep", "second"]));
                         assert!(body.get("status").is_none());
                         assert!(body.get("localizations").is_none());
                         *v.lock().unwrap() = Some(body.clone());
@@ -2062,6 +2062,7 @@ async fn settings_preserve_provider_fields_reconcile_restart_and_reject_stale_or
     sqlx::query("INSERT INTO agent_connections(id,name,product,token,publish_enabled) VALUES('other','Grok','Grok Bot','unused',1)").execute(&p.0.db).await.unwrap();
     let other = p.for_connection("other");
     assert!(other.update_video_settings(request.clone()).await.is_err());
+    assert!(other.settings_operation(&request.request_id).await.is_err());
     drop(other);
     let endpoints = p.0.endpoints.clone();
     let db = p.0.db.clone();
@@ -2073,8 +2074,9 @@ async fn settings_preserve_provider_fields_reconcile_restart_and_reject_stale_or
     item.lock().unwrap()["snippet"]["title"] =
         desired.lock().unwrap().as_ref().unwrap()["snippet"]["title"].clone();
     item.lock().unwrap()["etag"] = json!("v2");
+    item.lock().unwrap()["snippet"]["tags"] = json!(["second", "keep"]);
     assert_eq!(
-        p.update_video_settings(request.clone()).await.unwrap()["status"],
+        p.settings_operation(&request.request_id).await.unwrap()["status"],
         "completed"
     );
     assert_eq!(writes.load(Ordering::SeqCst), 1);
@@ -2271,4 +2273,88 @@ async fn scheduling_respects_owner_policy_and_same_request_id_does_not_create_ne
     let job = p.enqueue(request.clone()).await.unwrap();
     p.set("private_only", "true").await.unwrap();
     assert_eq!(p.enqueue(request).await.unwrap().id, job.id);
+}
+
+#[tokio::test]
+async fn thumbnail_initialization_sends_explicit_zero_length_and_preserves_rejected_attempt() {
+    let (_dir, mut p) = fixture().await;
+    account(&p).await;
+    p.set("youtube_manage_channel", "channel").await.unwrap();
+    let job = p.enqueue(input(media(&p).await)).await.unwrap();
+    sqlx::query("UPDATE publications SET status='uploaded',video_id='video' WHERE id=?")
+        .bind(&job.id)
+        .execute(&p.0.db)
+        .await
+        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let session = format!("{base}/thumbnails?upload_id=test");
+    let writes = Arc::new(AtomicUsize::new(0));
+    let count = writes.clone();
+    let mock = Router::new()
+        .route("/token", post(|| async { Json(json!({"access_token":"test","token_type":"Bearer","expires_in":3600})) }))
+        .route("/videos", axum::routing::get(|| async { Json(json!({"items":[{"id":"video","snippet":{"channelId":"channel"}}]})) }))
+        .route("/thumbnails", post(move |headers:axum::http::HeaderMap, body:axum::body::Bytes| {
+            let session=session.clone();
+            async move {
+                assert_eq!(headers.get("content-length").unwrap(), "0");
+                assert_eq!(headers["x-upload-content-type"], "image/png");
+                assert!(body.is_empty());
+                ([(axum::http::header::LOCATION,session)], "")
+            }
+        }).put(move |headers:axum::http::HeaderMap, body:axum::body::Bytes| {
+            let count=count.clone();
+            async move {
+                if headers["content-range"].to_str().unwrap().starts_with("bytes */") {
+                    return StatusCode::PERMANENT_REDIRECT.into_response();
+                }
+                assert!(body.starts_with(b"\x89PNG"));
+                count.fetch_add(1,Ordering::SeqCst);
+                Json(json!({"items":[{"default":{"url":"https://example.test/thumbnail.png"}}]})).into_response()
+            }
+        }));
+    let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let ep = &mut Arc::get_mut(&mut p.0).unwrap().endpoints;
+    ep.token = format!("{base}/token");
+    ep.videos = format!("{base}/videos");
+    ep.thumbnails = format!("{base}/thumbnails");
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(2, 2)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let data = png.into_inner();
+    let m = p
+        .create_media(MediaInput {
+            size: data.len() as i64,
+            mime: "image/png".into(),
+        })
+        .await
+        .unwrap();
+    let media_id = m["media_id"].as_str().unwrap();
+    assert_eq!(
+        call(&p, "PUT", &format!("/v1/media/{media_id}"), data, true)
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let mut request:assets::VideoAssetInput=serde_json::from_value(json!({"request_id":Uuid::new_v4().to_string(),"publication_id":job.id,"action":"set_thumbnail","media_id":media_id})).unwrap();
+    sqlx::query("INSERT INTO youtube_asset_operations(request_id,publication_id,agent_id,input,result) VALUES(?,?,?,?,?)")
+        .bind(&request.request_id).bind(&job.id).bind(p.connection_id()).bind(serde_json::to_string(&request).unwrap())
+        .bind(json!({"status":"rejected","phase":"initialize","error":"YouTube asset upload returned HTTP 411 (unspecified)"}).to_string()).execute(&p.0.db).await.unwrap();
+    assert_eq!(
+        p.manage_video_asset(request.clone()).await.unwrap()["status"],
+        "rejected"
+    );
+    assert_eq!(writes.load(Ordering::SeqCst), 0);
+    request.request_id = Uuid::new_v4().to_string();
+    assert_eq!(
+        p.manage_video_asset(request.clone()).await.unwrap()["status"],
+        "accepted"
+    );
+    assert_eq!(
+        p.manage_video_asset(request).await.unwrap()["status"],
+        "accepted"
+    );
+    assert_eq!(writes.load(Ordering::SeqCst), 1);
+    server.abort();
 }
