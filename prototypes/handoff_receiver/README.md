@@ -1,0 +1,16 @@
+# Receiver companion prototype
+
+This prototype tests one way AgentWay can close the idle-delivery gap: an owner-run receiver remains active alongside each connected agent. It authenticates with that connection's existing credential, checks AgentWay's durable inbox, invokes a **fixed owner-selected adapter**, commits the result, and delivers completed results to a fixed sender adapter. AgentWay never treats the adapter's presence as proof that a native agent acted.
+
+Run the isolated test after building the branch:
+
+```sh
+cargo build --locked -p agentway-server
+python3 prototypes/handoff_receiver/demo.py
+```
+
+The demo creates a temporary AgentWay database, two temporary agent identities with publishing disabled, a directed grant, and two local receiver workers. It assigns a harmless nonce task, lets the recipient worker complete it, and confirms that the sender worker receives the result without anyone copying a task ID. It then tests a lost local completion acknowledgment, recreates the sender worker, and checks that neither callback repeats. The temporary database and credentials are deleted when the demo exits. It does not touch the normal 8787/8788 instance or YouTube account.
+
+`receiver.py` is also runnable with `AGENTWAY_TOKEN` in its environment, `--url`, a private `--journal` path and one or both of `--task-command` and `--result-command`. A task command reads one task JSON object on standard input and writes a nonempty result to standard output. A result command reads the terminal task JSON object. Neither command is taken from task content. Do not point this experimental worker at a production account or use it for consequential tasks.
+
+The prototype deliberately fails closed on uncertain external execution: a crash after invoking an adapter leaves that task in `running`/`delivering` in the local journal for inspection, instead of running it again. It uses the current 100-row pull inbox and a local result receipt; it has no server-side push, persistent return-delivery acknowledgment, native agent binding, or production recovery UI. Those belong in the durable server protocol before release. A Codex or Grok label in the disposable demo database is **only a test identity**; no native Codex or Grok Bot conversation is started. Replacing the fixed callback with a supported native adapter, then passing the [same conformance runbook](../../docs/design/handoff-conformance-v1.md) for every advertised product, is the next gate.
