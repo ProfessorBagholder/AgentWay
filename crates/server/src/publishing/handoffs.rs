@@ -542,7 +542,11 @@ mod tests {
         .execute(&p.0.db)
         .await
         .unwrap();
-        let listed = all_grants(State(p.clone())).await.unwrap().0;
+        let listed = all_grants(State(p.clone()))
+            .await
+            .ok()
+            .expect("owner grant list")
+            .0;
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].sender_id, "sender");
         assert_eq!(listed[0].recipient_id, "receiver");
@@ -617,7 +621,14 @@ mod tests {
         );
         receiver.disconnect_connection().await.unwrap();
         assert_eq!(sender.discover_agents().await.unwrap(), json!([]));
-        assert!(all_grants(State(p)).await.unwrap().0.is_empty());
+        assert!(
+            all_grants(State(p))
+                .await
+                .ok()
+                .expect("owner grant list after disconnect")
+                .0
+                .is_empty()
+        );
     }
     #[tokio::test]
     async fn completion_is_durable_and_stale_claim_is_fenced() {
