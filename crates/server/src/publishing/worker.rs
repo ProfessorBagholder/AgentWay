@@ -44,9 +44,14 @@ impl Publisher {
         }
     }
     async fn fail(&self, id: &str, error: &str) -> Result<()> {
-        sqlx::query("UPDATE publications SET status='interrupted',error=?,revision=revision+1 WHERE id=? AND status!='uploaded'")
-            .bind(error).bind(id).execute(&self.0.db).await?;
-        self.publish_event(id).await
+        let mut tx = self.0.db.begin().await?;
+        let updated = sqlx::query("UPDATE publications SET status='interrupted',error=?,revision=revision+1 WHERE id=? AND status!='uploaded'")
+            .bind(error).bind(id).execute(&mut *tx).await?;
+        if updated.rows_affected() > 0 {
+            Self::publish_event_tx(&mut tx, id).await?;
+        }
+        tx.commit().await?;
+        Ok(())
     }
     async fn upload(&self, id: &str) -> Result<()> {
         self.check_publish_access().await?;
@@ -127,9 +132,11 @@ impl Publisher {
                 .to_owned();
             validate_session(&session, &self.0.endpoints.upload)?;
             // Persist before sending any media, so a lost response never creates a second video.
+            let mut tx = self.0.db.begin().await?;
             sqlx::query("UPDATE publications SET session=?,status='uploading',error=NULL,revision=revision+1 WHERE id=?")
-                .bind(self.0.vault.seal(&session)?).bind(id).execute(&self.0.db).await?;
-            self.publish_event(id).await?;
+                .bind(self.0.vault.seal(&session)?).bind(id).execute(&mut *tx).await?;
+            Self::publish_event_tx(&mut tx, id).await?;
+            tx.commit().await?;
             session
         };
         validate_session(&session, &self.0.endpoints.upload)?;
@@ -199,8 +206,10 @@ impl Publisher {
                 );
             }
             offset = next;
-            sqlx::query("UPDATE publications SET uploaded_bytes=?,status='uploading',revision=revision+1 WHERE id=?").bind(offset).bind(id).execute(&self.0.db).await?;
-            self.publish_event(id).await?;
+            let mut tx = self.0.db.begin().await?;
+            sqlx::query("UPDATE publications SET uploaded_bytes=?,status='uploading',revision=revision+1 WHERE id=?").bind(offset).bind(id).execute(&mut *tx).await?;
+            Self::publish_event_tx(&mut tx, id).await?;
+            tx.commit().await?;
         }
         bail!(
             "YouTube has all bytes but has not confirmed completion. Retry to check the same session."
@@ -225,9 +234,12 @@ impl Publisher {
                     "YouTube did not confirm a video ID. Retry to check the same session."
                 )
             })?;
+        let mut tx = self.0.db.begin().await?;
         sqlx::query("UPDATE publications SET status='uploaded',uploaded_bytes=total_bytes,video_id=?,video_url=?,error=NULL,revision=revision+1 WHERE id=?")
-            .bind(video).bind(format!("https://www.youtube.com/watch?v={video}")).bind(id).execute(&self.0.db).await?;
-        self.publish_event(id).await
+            .bind(video).bind(format!("https://www.youtube.com/watch?v={video}")).bind(id).execute(&mut *tx).await?;
+        Self::publish_event_tx(&mut tx, id).await?;
+        tx.commit().await?;
+        Ok(())
     }
 }
 fn provider_error(status: u16) -> anyhow::Error {

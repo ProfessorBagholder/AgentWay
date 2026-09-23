@@ -21,7 +21,7 @@ mod workspace;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{FromRow, Sqlite, SqlitePool, Transaction};
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::{Mutex, Notify, Semaphore};
 use tokio_util::sync::CancellationToken;
@@ -355,13 +355,21 @@ impl Publisher {
             .await?;
         Ok(())
     }
-    async fn publish_event(&self, id: &str) -> Result<()> {
-        let mut value = serde_json::to_value(self.publication(id).await?)?;
+    async fn publish_event_tx(tx: &mut Transaction<'_, Sqlite>, id: &str) -> Result<()> {
+        let publication: Publication = sqlx::query_as("SELECT * FROM publications WHERE id=?")
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?;
+        let mut value = serde_json::to_value(publication)?;
         let timestamp: String = sqlx::query_scalar("SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')")
-            .fetch_one(&self.0.db)
+            .fetch_one(&mut **tx)
             .await?;
         value["event_at"] = json!(timestamp);
-        self.emit("publication.upsert", value).await
+        sqlx::query("INSERT INTO events(kind,payload) VALUES('publication.upsert',?)")
+            .bind(value.to_string())
+            .execute(&mut **tx)
+            .await?;
+        Ok(())
     }
     pub async fn create_media(&self, input: MediaInput) -> Result<Value> {
         if input.mime.starts_with("video/") && input.size > self.0.max_video_bytes {
@@ -441,9 +449,11 @@ impl Publisher {
         }
         let id = Uuid::new_v4().to_string();
         let agent_name = self.setting("agent_connection_name").await?;
+        let mut tx = self.0.db.begin().await?;
         sqlx::query("INSERT INTO publications(id,request_id,input,channel_id,media_id,title,total_bytes,agent_name,agent_id) VALUES(?,?,?,?,?,?,?,?,?)")
-            .bind(&id).bind(&input.request_id).bind(encoded).bind(channel).bind(&media.id).bind(&input.title).bind(media.size).bind(agent_name).bind(self.connection_id()).execute(&self.0.db).await?;
-        self.publish_event(&id).await?;
+            .bind(&id).bind(&input.request_id).bind(encoded).bind(channel).bind(&media.id).bind(&input.title).bind(media.size).bind(agent_name).bind(self.connection_id()).execute(&mut *tx).await?;
+        Self::publish_event_tx(&mut tx, &id).await?;
+        tx.commit().await?;
         self.0.wake.notify_one();
         self.publication(&id).await
     }
@@ -456,9 +466,15 @@ impl Publisher {
             self.check_publication_owner(id).await?;
         }
         self.for_connection(&owner).check_publish_access().await?;
-        sqlx::query("UPDATE publications SET status='queued',error=NULL,revision=revision+1 WHERE id=? AND status='interrupted'").bind(id).execute(&self.0.db).await?;
-        self.publish_event(id).await?;
-        self.0.wake.notify_one();
+        let mut tx = self.0.db.begin().await?;
+        let updated = sqlx::query("UPDATE publications SET status='queued',error=NULL,revision=revision+1 WHERE id=? AND status='interrupted'").bind(id).execute(&mut *tx).await?;
+        if updated.rows_affected() > 0 {
+            Self::publish_event_tx(&mut tx, id).await?;
+        }
+        tx.commit().await?;
+        if updated.rows_affected() > 0 {
+            self.0.wake.notify_one();
+        }
         self.publication(id).await
     }
 }
