@@ -6,6 +6,7 @@ once, then requires AgentWay readback and Grok Bot run history for verification.
 """
 
 import argparse
+import getpass
 import json
 import os
 import sys
@@ -29,8 +30,10 @@ def webhook_url(value: str) -> str:
         or parsed.password
         or parsed.fragment
         or parsed.port not in (None, 443)
-        or parsed.hostname not in ("api2.cursor.sh", "cursor.com")
-        and not parsed.hostname.endswith(".cursor.com")
+        or (
+            parsed.hostname not in ("api2.cursor.sh", "cursor.com")
+            and not parsed.hostname.endswith(".cursor.com")
+        )
     ):
         raise ValueError("Expected an HTTPS Cursor webhook URL without embedded credentials")
     return value
@@ -40,10 +43,22 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("task_id", type=uuid.UUID)
     parser.add_argument("--delivery-id", type=uuid.UUID, default=uuid.uuid4())
+    parser.add_argument(
+        "--prompt-credentials",
+        action="store_true",
+        help="Read URL and bearer key privately from the terminal instead of environment variables",
+    )
     args = parser.parse_args()
     try:
-        url = webhook_url(os.environ["GROK_BOT_WEBHOOK_URL"])
-        key = os.environ["GROK_BOT_WEBHOOK_KEY"]
+        if args.prompt_credentials:
+            if not sys.stdin.isatty():
+                raise ValueError("Private credential prompt requires a terminal")
+            raw_url = getpass.getpass("Grok webhook URL: ")
+            key = getpass.getpass("Grok webhook key: ")
+        else:
+            raw_url = os.environ["GROK_BOT_WEBHOOK_URL"]
+            key = os.environ["GROK_BOT_WEBHOOK_KEY"]
+        url = webhook_url(raw_url)
         if not key or any(c in key for c in "\r\n"):
             raise ValueError("Invalid webhook key")
     except (KeyError, ValueError) as error:
