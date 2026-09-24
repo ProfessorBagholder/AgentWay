@@ -3,6 +3,7 @@ mod connections;
 use channel::ChannelDescriptionInput;
 mod assets;
 mod guidance;
+mod handoff_receivers;
 mod handoffs;
 mod http;
 mod mcp;

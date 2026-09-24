@@ -89,7 +89,7 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "Recipient claims a queued task for five minutes. Generate a random UUID claim_token; reuse it after a lost response and for renew/complete/fail. Keep it private. An expired lease can be reclaimed and invalidates the old token."
+        description = "Recipient claims a queued task for five minutes. Generate a random UUID claim_token; reuse it after a lost response and for renew/complete/fail. Automatic delivery also requires the admitted receiver envelope's delivery_id. Keep the claim token private."
     )]
     async fn claim_agent_task(
         &self,
@@ -97,7 +97,7 @@ impl PublishingTools {
         Parameters(input): Parameters<handoffs::TaskClaim>,
     ) -> Result<rmcp::Json<Value>, String> {
         self.publisher_for(&ctx)?
-            .claim_handoff(&input.id, &input.claim_token)
+            .claim_handoff(&input.id, &input.claim_token, input.delivery_id.as_deref())
             .await
             .map(rmcp::Json)
             .map_err(|e| e.to_string())
@@ -173,15 +173,15 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "Sender acknowledges a terminal task result after its own agent has received it. Idempotent; completion alone is not delivery to the sender."
+        description = "Sender acknowledges a terminal task result after its own agent has received it. Automatic delivery requires the admitted result envelope's delivery_id. Idempotent; recipient completion alone is not sender delivery."
     )]
     async fn acknowledge_agent_task_result(
         &self,
         ctx: RequestContext<RoleServer>,
-        Parameters(input): Parameters<UploadId>,
+        Parameters(input): Parameters<handoffs::TaskAck>,
     ) -> Result<rmcp::Json<Value>, String> {
         self.publisher_for(&ctx)?
-            .acknowledge_handoff_result(&input.id)
+            .acknowledge_handoff_result(&input.id, input.delivery_id.as_deref())
             .await
             .map(rmcp::Json)
             .map_err(|e| e.to_string())
