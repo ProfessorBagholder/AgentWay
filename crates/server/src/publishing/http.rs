@@ -19,6 +19,9 @@ impl<E: Into<anyhow::Error>> From<E> for Error {
 }
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
+        if let Some(error) = self.0.downcast_ref::<handoffs::HandoffError>() {
+            return (error.status, Json(json!({"error":error.message}))).into_response();
+        }
         if let Some(error) = self.0.downcast_ref::<transfers::TransferError>() {
             let mut response = (
                 StatusCode::from_u16(error.status).unwrap(),
@@ -96,6 +99,8 @@ impl Publisher {
             .merge(super::workspace::routes())
             .merge(super::transfer_activity::routes())
             .merge(super::connections::routes())
+            .merge(super::handoffs::admin_routes())
+            .merge(super::handoff_receivers::admin_routes())
             .route("/health/media", get(media_health))
             .route("/api/youtube", get(status))
             .route("/api/youtube/config", post(config))
@@ -120,6 +125,8 @@ impl Publisher {
     pub fn bridge_router(&self) -> Router {
         Router::new()
             .route("/v1/status", get(status))
+            .merge(super::handoffs::agent_routes())
+            .merge(super::handoff_receivers::transport_routes())
             .route("/v1/youtube/playlists", get(playlists))
             .route("/v1/youtube/podcasts", post(podcast))
             .route(
@@ -188,10 +195,24 @@ fn bearer_credential(headers: &HeaderMap) -> Result<&str, &'static str> {
     }
     Ok(token)
 }
-async fn authenticate(State(p): State<Publisher>, req: Request, next: Next) -> Response {
+async fn authenticate(State(p): State<Publisher>, mut req: Request, next: Next) -> Response {
     // Browser cross-origin use is unsupported; this API is for agent HTTP clients.
     if req.headers().contains_key("origin") {
         return StatusCode::FORBIDDEN.into_response();
+    }
+    if req.uri().path().starts_with("/v1/handoff-receiver/") {
+        let token = match bearer_credential(req.headers()) {
+            Ok(token) => token,
+            Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+        };
+        match p.authenticate_receiver(token).await {
+            Ok(Some(receiver)) => {
+                req.extensions_mut().insert(receiver);
+                return next.run(req).await;
+            }
+            Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        }
     }
     let mut failure = None;
     let authenticated = match bearer_credential(req.headers()) {

@@ -465,6 +465,8 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
     let response = mcp_json(init).await;
     assert!(response["result"]["capabilities"]["tools"].is_object());
     assert_eq!(response["result"]["instructions"], guidance::INSTRUCTIONS);
+    assert!(guidance::INSTRUCTIONS.contains("AgentWay guidance, version 18."));
+    assert!(guidance::INSTRUCTIONS.contains("AgentWay cannot wake its existing conversation"));
     let status: Value = client
         .get(url.replace("/mcp", "/v1/status"))
         .bearer_auth(&token)
@@ -479,6 +481,19 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
     assert_eq!(
         status["agent_guidance"],
         guidance::payload(MAX_MEDIA * 5, MAX_MEDIA)
+    );
+    assert_eq!(status["agent_guidance"]["version"], "18");
+    assert_eq!(
+        status["agent_guidance"]["handoff_delivery"]["mode"],
+        "pull_inbox"
+    );
+    assert_eq!(
+        status["agent_guidance"]["handoff_delivery"]["native_wake_available"],
+        false
+    );
+    assert_eq!(
+        status["agent_guidance"]["agent_task_list_schema"]["$defs"]["TaskDirection"]["enum"],
+        json!(["incoming", "outgoing"])
     );
     let required = status["agent_guidance"]["publish_schema"]["required"]
         .as_array()
@@ -519,6 +534,16 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
             .any(|t| t["name"] == "publish_youtube")
     );
     for name in [
+        "list_agents",
+        "create_agent_task",
+        "list_agent_tasks",
+        "get_agent_task",
+        "claim_agent_task",
+        "renew_agent_task",
+        "complete_agent_task",
+        "fail_agent_task",
+        "cancel_agent_task",
+        "acknowledge_agent_task_result",
         "create_resumable_media_upload",
         "get_media_upload",
         "complete_media_upload",
@@ -549,6 +574,10 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
                 .any(|t| t["name"] == name)
         );
     }
+    let discovered=mcp_json(client.post(&url).bearer_auth(&token).header("accept","application/json, text/event-stream").header("mcp-protocol-version","2025-03-26")
+        .json(&json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_agents","arguments":{}}})).send().await.unwrap()).await;
+    assert!(discovered.get("error").is_none());
+    assert_eq!(discovered["result"]["isError"], false);
     let args: super::mcp::VisibilityRequest = serde_json::from_value(
         json!({"id":"publication","request_id":Uuid::new_v4().to_string(),"privacy":"private"}),
     )
@@ -2060,6 +2089,29 @@ async fn independent_connections_isolate_credentials_media_permissions_and_attri
             .0,
         StatusCode::NOT_FOUND
     );
+}
+
+#[tokio::test]
+async fn codex_connection_is_independent_and_starts_without_publishing_access() {
+    let (_dir, p) = fixture().await;
+    let muse_token = p.secret("agent_token").await.unwrap();
+    let (status, created) = admin(
+        &p,
+        "POST",
+        "/api/agent-connections",
+        json!({"product":"Codex","publish_enabled":false}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(created["name"], "Codex");
+    assert_eq!(created["product"], "Codex");
+    assert_eq!(created["publish_enabled"], false);
+    let codex = p.for_connection(created["id"].as_str().unwrap());
+    let codex_token = codex.secret("agent_token").await.unwrap();
+    assert_ne!(codex_token, muse_token);
+    let (_, discovery) = call(&codex, "GET", "/v1/status", vec![], true).await;
+    assert_eq!(discovery["connection"]["name"], "Codex");
+    assert_eq!(discovery["connection"]["publish_enabled"], false);
 }
 
 #[tokio::test]

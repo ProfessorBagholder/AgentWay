@@ -145,8 +145,15 @@ impl Publisher {
             Uuid::new_v4().simple(),
             Uuid::new_v4().simple()
         ))?;
+        let mut tx = self.0.db.begin().await?;
         sqlx::query("UPDATE agent_connections SET token=?,disconnected=1,last_seen=NULL,operation=NULL,revision=revision+1 WHERE id=?")
-            .bind(replacement).bind(self.connection_id()).execute(&self.0.db).await?;
+            .bind(replacement).bind(self.connection_id()).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM agent_handoff_grants WHERE sender_id=? OR recipient_id=?")
+            .bind(self.connection_id())
+            .bind(self.connection_id())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
     pub(super) async fn connection_changed(&self) -> Api<Value> {
@@ -185,6 +192,7 @@ async fn create(State(p): State<Publisher>, Json(input): Json<Create>) -> Api<Va
         "Muse" => "Muse",
         "Claude" => "Claude",
         "ChatGPT" => "ChatGPT",
+        "Codex" => "Codex",
         _ => return Err(anyhow::anyhow!("Choose an agent platform").into()),
     };
     let _guard = p.0.mutation.lock().await;

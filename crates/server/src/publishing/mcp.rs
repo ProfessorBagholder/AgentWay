@@ -34,6 +34,164 @@ pub struct DeleteRequest {
 #[tool_router]
 impl PublishingTools {
     #[tool(
+        description = "List agents this connection is permitted to assign work to. IDs are stable; delivery is a pull inbox, so this does not wake the recipient automatically."
+    )]
+    async fn list_agents(
+        &self,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .discover_agents()
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Create a task in a permitted agent's pull inbox. Omit automatic_delivery: native wake is not currently available. Use a stable request_id UUID and identical arguments on retries. Optional timeout_seconds sets a server-enforced deadline (60–604800 seconds; default 86400). Tell the user that queued is stored, not delivered or accepted."
+    )]
+    async fn create_agent_task(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<handoffs::CreateHandoff>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .create_handoff(input)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "List this connection's tasks. direction=incoming finds work addressed to this agent; direction=outgoing finds tasks it sent. Filter status=queued for unclaimed incoming work, or page through outgoing tasks to inspect results. Follow next with before until the page set is complete. Listing is a pull check, not a native wake."
+    )]
+    async fn list_agent_tasks(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<handoffs::ListHandoffs>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .list_handoffs(
+                input.status.as_deref(),
+                input.before,
+                input.direction,
+                false,
+            )
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Get a task and its latest state/result by ID. Only the sender and recipient can read it."
+    )]
+    async fn get_agent_task(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<UploadId>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .get_handoff(&input.id, false)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Recipient claims a queued task for five minutes. Generate a random UUID claim_token; reuse it after a lost response and for renew/complete/fail. Automatic delivery also requires the admitted receiver envelope's delivery_id. Keep the claim token private."
+    )]
+    async fn claim_agent_task(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<handoffs::TaskClaim>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .claim_handoff(&input.id, &input.claim_token, input.delivery_id.as_deref())
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Recipient extends an active task claim by five minutes. Use the claim_token returned by claim_agent_task."
+    )]
+    async fn renew_agent_task(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<handoffs::TaskClaim>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .renew_handoff(&input.id, &input.claim_token)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Recipient completes a claimed task with a result. Requires the current claim_token; a cancelled or expired task rejects late completion."
+    )]
+    async fn complete_agent_task(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<handoffs::TaskFinish>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .finish_handoff(
+                &input.id,
+                handoffs::FinishInput {
+                    claim_token: input.claim_token,
+                    message: input.message,
+                },
+                false,
+            )
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Recipient reports a failure on a claimed task. Requires current claim_token and a useful error message."
+    )]
+    async fn fail_agent_task(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<handoffs::TaskFinish>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .finish_handoff(
+                &input.id,
+                handoffs::FinishInput {
+                    claim_token: input.claim_token,
+                    message: input.message,
+                },
+                true,
+            )
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Sender cancels its queued or claimed task. A cancelled task rejects subsequent completion."
+    )]
+    async fn cancel_agent_task(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<UploadId>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .cancel_handoff(&input.id)
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
+        description = "Sender acknowledges a terminal task result after its own agent has received it. Automatic delivery requires the admitted result envelope's delivery_id. Idempotent; recipient completion alone is not sender delivery."
+    )]
+    async fn acknowledge_agent_task_result(
+        &self,
+        ctx: RequestContext<RoleServer>,
+        Parameters(input): Parameters<handoffs::TaskAck>,
+    ) -> Result<rmcp::Json<Value>, String> {
+        self.publisher_for(&ctx)?
+            .acknowledge_handoff_result(&input.id, input.delivery_id.as_deref())
+            .await
+            .map(rmcp::Json)
+            .map_err(|e| e.to_string())
+    }
+    #[tool(
         description = "Update an existing video's metadata/settings without reuploading. Read get_youtube_video first and supply its exact etag. Omitted fields are preserved; settings.localizations replaces the complete translation map. Stable request_id and identical retries only reconcile once a write was attempted. completed means verified, verification_pending means accepted, outcome_unknown means uncertain: never send a new UUID to bypass uncertainty. Scheduling requires an unpublished private video and user authorization; clear_schedule cancels it. Existing video-management consent required."
     )]
     async fn update_youtube_video(

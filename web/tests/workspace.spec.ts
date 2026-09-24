@@ -47,6 +47,9 @@ test.beforeEach(async ({ page }) => {
   await page.route("**/api/media-transfers", (r) =>
     r.fulfill({ json: { items: [], next: null } }),
   );
+  await page.route("**/api/agent-handoffs", (r) =>
+    r.fulfill({ json: { items: [], next: null } }),
+  );
   await page.route("**/api/publications/upload", (r) =>
     r.fulfill({
       json: {
@@ -84,6 +87,256 @@ test.beforeEach(async ({ page }) => {
     }
     (window as any).EventSource = MockEvents;
   });
+});
+test("agent handoff appears in Tasks and its result updates in place", async ({
+  page,
+}, testInfo) => {
+  const task = {
+    cursor: 1,
+    id: "handoff-1",
+    request_id: "request-1",
+    sender_id: "muse",
+    sender_name: "Muse",
+    recipient_id: "grok",
+    recipient_name: "Grok",
+    title: "Review episode",
+    instructions: "Check the transcript",
+    status: "queued",
+    delivery_mode: "pull",
+    result_acknowledged_at: null,
+    result: null,
+    error: null,
+    lease_until: null,
+    timeout_seconds: null,
+    expires_at: null,
+    created_at: "2026-09-23T12:00:00Z",
+    updated_at: "2026-09-23T12:00:00Z",
+    revision: 1,
+  };
+  await page.route("**/api/agent-handoffs", (r) =>
+    r.fulfill({ json: { items: [task], next: null } }),
+  );
+  await page.route("**/api/agent-handoffs/handoff-1", (r) =>
+    r.fulfill({ json: task }),
+  );
+  await page.route("**/api/agent-handoffs/handoff-1/history?*", (r) =>
+    r.fulfill({
+      json: {
+        items: [
+          { sequence: 1, task: { ...task, action: "created" } },
+          {
+            sequence: 2,
+            task: {
+              ...task,
+              action: "completed",
+              status: "completed",
+              result: "Looks good",
+              revision: 2,
+            },
+          },
+        ],
+        next: null,
+      },
+    }),
+  );
+  const row = page.getByRole("row", { name: /Review episode/ });
+  for (const theme of ["dark", "light"]) {
+    await page.goto("/#/settings");
+    await page
+      .getByRole("radio", { name: theme === "dark" ? "Dark" : "Light" })
+      .check();
+    for (const width of [1440, 900, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/#/tasks");
+      await expect(row).toContainText("Muse");
+      await expect(row).toContainText("Grok");
+      await expect(row).toContainText("Awaiting pickup");
+      await row.getByRole("link", { name: "Review episode" }).click();
+      await expect(
+        page.getByText(
+          "Waiting for Grok to check AgentWay. No pickup has been recorded.",
+        ),
+      ).toBeVisible();
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth > innerWidth,
+        ),
+      ).toBe(false);
+      await page.screenshot({
+        path: testInfo.outputPath(`${theme}-${width}-awaiting-pickup.png`),
+        fullPage: true,
+      });
+    }
+  }
+  await page.goto("/#/tasks");
+  await page.evaluate(
+    (t) =>
+      (window as any).testEvents.dispatchEvent(
+        new MessageEvent("agent.handoff", {
+          data: JSON.stringify({
+            ...t,
+            status: "completed",
+            result: "Looks good",
+            revision: 2,
+          }),
+        }),
+      ),
+    task,
+  );
+  await expect(row).toContainText("Completed");
+  await row.getByRole("link", { name: "Review episode" }).click();
+  await expect(page.getByText("Check the transcript")).toBeVisible();
+  await page.getByRole("link", { name: "View activity" }).click();
+  await page.getByRole("button", { name: /Review episode/ }).click();
+  await expect(page.getByText("Looks good")).toBeVisible();
+});
+test("timed-out handoff shows a terminal state and its deadline", async ({
+  page,
+}, testInfo) => {
+  const task = {
+    cursor: 2,
+    id: "timed-out-task",
+    request_id: "request-2",
+    sender_id: "muse",
+    sender_name: "Muse",
+    recipient_id: "grok",
+    recipient_name: "Grok",
+    title: "Review overdue episode",
+    instructions: "Check the transcript",
+    status: "timed_out",
+    result: null,
+    error: "Recipient did not claim the task before its deadline.",
+    lease_until: null,
+    timeout_seconds: 720,
+    expires_at: 1790165520,
+    created_at: "2026-09-23T12:00:00Z",
+    updated_at: "2026-09-23T12:12:00Z",
+    revision: 2,
+  };
+  await page.route("**/api/agent-handoffs", (r) =>
+    r.fulfill({ json: { items: [task], next: null } }),
+  );
+  await page.route("**/api/agent-handoffs/timed-out-task", (r) =>
+    r.fulfill({ json: task }),
+  );
+  for (const theme of ["dark", "light"]) {
+    await page.goto("/#/settings");
+    await page
+      .getByRole("radio", { name: theme === "dark" ? "Dark" : "Light" })
+      .check();
+    for (const width of [1440, 900, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/#/tasks");
+      const row = page.getByRole("row", { name: /Review overdue episode/ });
+      await expect(row).toContainText("Timed out");
+      await row.getByRole("link", { name: "Review overdue episode" }).click();
+      await expect(
+        page.getByText("Recipient did not claim the task before its deadline."),
+      ).toBeVisible();
+      await expect(page.getByText("Deadline", { exact: true })).toBeVisible();
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth > innerWidth,
+        ),
+      ).toBe(false);
+      await page.screenshot({
+        path: testInfo.outputPath(`${theme}-${width}-timeout.png`),
+        fullPage: true,
+      });
+    }
+  }
+});
+test("task access shows and edits multiple directed agent permissions", async ({
+  page,
+}) => {
+  await page.route("**/api/agent-connections", (r) =>
+    r.fulfill({
+      json: [
+        {
+          id: "muse",
+          name: "Muse",
+          product: "Muse",
+          revision: 1,
+          state: "Connected",
+          publish_enabled: true,
+          activity: null,
+        },
+        {
+          id: "grok",
+          name: "Grok",
+          product: "Grok Bot",
+          revision: 1,
+          state: "Connected",
+          publish_enabled: true,
+          activity: null,
+        },
+        {
+          id: "claude",
+          name: "Claude",
+          product: "Claude",
+          revision: 1,
+          state: "Connected",
+          publish_enabled: false,
+          activity: null,
+        },
+      ],
+    }),
+  );
+  const grants: { sender_id: string; recipient_id: string }[] = [];
+  await page.route("**/api/agent-handoff-grants", (route) =>
+    route.fulfill({ json: grants }),
+  );
+  await page.route("**/api/agent-handoff-grants/*", (route) => {
+    if (route.request().method() === "POST") {
+      const sender_id = route.request().url().split("/").pop()!;
+      const body = route.request().postDataJSON() as {
+        recipient_id: string;
+        enabled: boolean;
+      };
+      if (body.enabled)
+        grants.push({ sender_id, recipient_id: body.recipient_id });
+      else {
+        const index = grants.findIndex(
+          (grant) =>
+            grant.sender_id === sender_id &&
+            grant.recipient_id === body.recipient_id,
+        );
+        if (index >= 0) grants.splice(index, 1);
+      }
+    }
+    return route.fulfill({ json: grants.map((g) => g.recipient_id) });
+  });
+  await page.goto("/#/agents");
+  await page.getByRole("link", { name: "Task access" }).click();
+  await page
+    .getByRole("combobox", { name: "Assigning agent" })
+    .selectOption("grok");
+  await page
+    .getByRole("combobox", { name: "Receiving agent" })
+    .selectOption("muse");
+  await page.getByRole("button", { name: "Allow task assignment" }).click();
+  await expect(
+    page.getByRole("row", { name: /Grok Muse Remove/ }),
+  ).toBeVisible();
+  await page
+    .getByRole("combobox", { name: "Assigning agent" })
+    .selectOption("claude");
+  await page
+    .getByRole("combobox", { name: "Receiving agent" })
+    .selectOption("muse");
+  await page.getByRole("button", { name: "Allow task assignment" }).click();
+  await expect(
+    page.getByRole("row", { name: /Claude Muse Remove/ }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Remove task access from Grok to Muse" })
+    .click();
+  await expect(page.getByRole("row", { name: /Grok Muse Remove/ })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByRole("row", { name: /Claude Muse Remove/ }),
+  ).toBeVisible();
 });
 test("real task rows update without navigation or unrelated fetching", async ({
   page,

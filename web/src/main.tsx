@@ -10,7 +10,12 @@ import {
   type MediaTransfer,
 } from "./activity";
 import { upsertPublication, type Publication } from "./publishing";
-import { Workspace, type Journal } from "./workspace";
+import {
+  Workspace,
+  upsertHandoff,
+  type AgentHandoff,
+  type Journal,
+} from "./workspace";
 import "./style.css";
 function routeFromHash() {
   let route = window.location.hash.replace(/^#\/?/, "");
@@ -100,6 +105,13 @@ function App() {
           upsertConnection(
             JSON.parse((event as MessageEvent).data) as BridgeConnection,
           );
+        });
+        stream.addEventListener("agent.handoff", (event) => {
+          const task = JSON.parse((event as MessageEvent).data) as AgentHandoff;
+          upsertHandoff(task);
+          void cache.invalidateQueries({
+            queryKey: ["agent-handoff-history", task.id],
+          });
         });
         setReady(true);
       })

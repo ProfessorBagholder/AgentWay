@@ -884,6 +884,100 @@ th {
 .agent-table td a {
   color: var(--text);
 }
+.access-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--space-4);
+  max-width: 1000px;
+  margin-bottom: var(--space-6);
+}
+.access-form label,
+.access-search {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.access-form select,
+.access-search input {
+  display: block;
+  margin-top: var(--space-2);
+  min-height: var(--control-height);
+}
+.access-form button {
+  min-height: var(--control-height);
+  white-space: nowrap;
+}
+.access-search {
+  display: block;
+  max-width: 360px;
+  margin-bottom: var(--space-4);
+}
+.access-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+.access-table th:first-child,
+.access-table th:nth-child(2) {
+  width: 40%;
+}
+.access-table th:last-child {
+  width: 20%;
+}
+.access-table td:first-child {
+  width: auto;
+}
+.access-table td {
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+.access-table button {
+  min-height: var(--control-height);
+}
+@media (max-width: 700px) {
+  .access-form {
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+  .access-form button {
+    justify-self: start;
+  }
+  .access-table,
+  .access-table tbody,
+  .access-table tr {
+    display: block;
+  }
+  .access-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .access-table tr {
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .access-table tr:last-child {
+    border-bottom: 0;
+  }
+  .access-table td {
+    display: grid;
+    grid-template-columns: 112px minmax(0, 1fr);
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-4);
+    border: 0;
+  }
+  .access-table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .access-table td button {
+    justify-self: start;
+  }
+}
 @media (max-width: 620px) {
   .agent-table th,
   .agent-table td {
@@ -1250,6 +1344,10 @@ fieldset {
   width: 100%;
   table-layout: fixed;
   border-collapse: collapse;
+}
+.handoff-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .work-table .work-title {
   width: 40%;

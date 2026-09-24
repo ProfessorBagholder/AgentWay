@@ -20,9 +20,11 @@ Theme is one native radio group styled as a segmented selector, with Light/sun a
 
 ## Operational lists
 
-Tasks and Activity log use the same WorkTable and WorkMetadata components in web/src/workspace.tsx. Same column widths, header treatment, padding, alignment, date formatting and badges. Columns: Task/Activity, Agent, Platform, Created, Status. The title is primary. Tasks navigate to work details/recovery; Activity expands one correlated operation into its steps. Use an explicit chevron button with aria-expanded/aria-controls. Never replace a whole list on a row update or fetch step history before expansion.
+Tasks and Activity log use the same WorkTable and WorkMetadata components in web/src/workspace.tsx. Same column widths, header treatment, padding, alignment, date formatting and badges. Columns: Task/Activity, Agent, Destination, Created, Status. Destination is the receiving service or agent; this accommodates both publishing and agent-to-agent work. The title is primary. Tasks navigate to work details/recovery; Activity expands one correlated operation into its steps. Use an explicit chevron button with aria-expanded/aria-controls. Never replace a whole list on a row update or fetch step history before expansion.
 
-Below 1000px, reflow each record into labelled fields; do not hide Agent, Platform, date, status or actions. Long titles wrap without pushing columns offscreen. Keep semantic table markup and column headers. Agent names must come from recorded attribution, never a guessed product or today's renamed connection. Historical missing attribution displays Not recorded; new uploads snapshot the authenticated connection name and persist its ID. A credential identifies a connection, not a unique process or conversation.
+For pull-inbox agent handoffs, queued work is labelled “Awaiting pickup”; task detail says which recipient must check AgentWay. A stored terminal outcome is not presented as read by the sender until AgentWay records the sender's result acknowledgment. Keep these meanings consistent in the owner UI and agent guidance; never imply native wake from a connected badge or grant.
+
+Below 1000px, reflow each record into labelled fields; do not hide Agent, Destination, date, status or actions. Long titles wrap without pushing columns offscreen. Keep semantic table markup and column headers. Agent names must come from recorded attribution, never a guessed product or today's renamed connection. Historical missing attribution displays Not recorded; new uploads snapshot the authenticated connection name and persist its ID. A credential identifies a connection, not a unique process or conversation.
 
 ## Verification before presenting any UI change
 
@@ -33,3 +35,5 @@ Feature branch deployments are for user testing. Only after explicit merge appro
 ## Agent connections
 
 Agents lists every configured connection with the established short product label and status badge. Connect agent uses the Settings row alignment and existing controls; selecting a product creates an independent credential, not an inferred connection. Only authenticated traffic establishes Connected. Details retain the clicked label, platform permission, scoped setup instructions and Disconnect. Update only the affected connection on SSE events. Platform agent links show connected agents with permission. Never use a shared token to infer a second agent or reset existing credentials during enrollment.
+
+Task access is a peer section of Agents, not a growing checkbox list on every agent detail. Show only granted directed relationships as Assigning agent → Receiving agent rows, with a separate two-agent form to add one. Disallow self-assignment and duplicate pairs in the form. Keep agent names linked to their details, disambiguate duplicate names by connection ID, and preserve both sides of every relationship at narrow widths. Search the grant list when it grows; do not render an all-agents permissions matrix.

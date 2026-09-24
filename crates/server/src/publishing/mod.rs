@@ -3,6 +3,8 @@ mod connections;
 use channel::ChannelDescriptionInput;
 mod assets;
 mod guidance;
+mod handoff_receivers;
+mod handoffs;
 mod http;
 mod mcp;
 mod oauth;
@@ -234,7 +236,9 @@ impl Publisher {
     }
     pub fn start_worker(&self) -> tokio::task::JoinHandle<()> {
         let this = self.clone();
-        tokio::spawn(async move { this.worker().await })
+        tokio::spawn(async move {
+            tokio::join!(this.worker(), this.handoff_deadline_worker());
+        })
     }
     async fn setting(&self, key: &str) -> Result<Option<String>> {
         if let Some(value) = self.connection_setting(key).await? {
