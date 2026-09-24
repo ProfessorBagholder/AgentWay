@@ -13,8 +13,8 @@ type Api<T> = std::result::Result<Json<T>, http::Error>;
 
 #[derive(Clone)]
 pub(super) struct ReceiverIdentity {
-    connection_id: String,
-    generation: i64,
+    pub(super) connection_id: String,
+    pub(super) generation: i64,
 }
 
 #[derive(Deserialize)]
@@ -55,6 +55,10 @@ pub(super) fn admin_routes() -> Router<Publisher> {
 pub(super) fn transport_routes() -> Router<Publisher> {
     Router::new()
         .route("/v1/handoff-receiver/deliveries", get(deliveries))
+        .route(
+            "/v1/handoff-receiver/deliveries/stream",
+            get(handoff_receiver_stream::stream),
+        )
         .route("/v1/handoff-receiver/deliveries/{id}/admit", post(admit))
 }
 
