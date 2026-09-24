@@ -138,6 +138,11 @@ def run() -> None:
                 recipient_agent.request("POST", f"/v1/agent-tasks/{task['id']}/complete", {
                     "claim_token": claim, "message": "Transport test received.",
                 })
+                # The result and return envelope must survive a separate
+                # restart before the original sender receives either one.
+                server.terminate()
+                server.wait(timeout=10)
+                server = start(log)
                 returns = sender_transport.request("GET", "/v1/handoff-receiver/deliveries")["items"]
                 assert len(returns) == 1 and returns[0]["kind"] == "result_available"
                 result = returns[0]
@@ -146,9 +151,13 @@ def run() -> None:
                     "generation": result["binding_generation"], "native_reference": "fake-sender-run",
                 })
                 assert sender_agent.request("GET", f"/v1/agent-tasks/{task['id']}")["result_acknowledged_at"] is None
-                sender_agent.request("POST", f"/v1/agent-tasks/{task['id']}/ack-result", {
+                acknowledged = sender_agent.request("POST", f"/v1/agent-tasks/{task['id']}/ack-result", {
                     "delivery_id": result["delivery_id"],
                 })
+                repeated = sender_agent.request("POST", f"/v1/agent-tasks/{task['id']}/ack-result", {
+                    "delivery_id": result["delivery_id"],
+                })
+                assert repeated["result_acknowledged_at"] == acknowledged["result_acknowledged_at"]
                 finished = sender_agent.request("GET", f"/v1/agent-tasks/{task['id']}")
                 assert finished["status"] == "completed"
                 assert finished["result"] == "Transport test received."
@@ -176,7 +185,7 @@ def run() -> None:
                         (blocked["id"],),
                     ).fetchone()
                 assert state == ("blocked", "grant_revoked"), state
-                print("PASS: isolated offer, admission, restart, acceptance, return, receipt and revocation")
+                print("PASS: isolated offer, admission, both restarts, acceptance, return, receipt replay and revocation")
             finally:
                 server.terminate()
                 server.wait(timeout=10)
