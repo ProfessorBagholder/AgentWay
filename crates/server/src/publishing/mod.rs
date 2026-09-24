@@ -4,6 +4,7 @@ use channel::ChannelDescriptionInput;
 mod assets;
 mod guidance;
 mod handoff_receivers;
+mod handoff_stream;
 mod handoffs;
 mod http;
 mod mcp;
@@ -43,6 +44,7 @@ struct Inner {
     max_video_bytes: i64,
     endpoints: Endpoints,
     wake: Notify,
+    handoff_streams: Arc<Semaphore>,
     transfers: Semaphore,
     media_locks: [Mutex<()>; 64],
     access_token: Mutex<Option<CachedToken>>,
@@ -222,6 +224,7 @@ impl Publisher {
                 client,
                 endpoints: Endpoints::default(),
                 wake: Notify::new(),
+                handoff_streams: Arc::new(Semaphore::new(32)),
                 transfers: Semaphore::new(2),
                 media_locks: std::array::from_fn(|_| Mutex::new(())),
                 access_token: Mutex::new(None),

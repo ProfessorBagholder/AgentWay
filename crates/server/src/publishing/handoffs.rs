@@ -182,6 +182,7 @@ pub(super) fn agent_routes() -> Router<Publisher> {
     Router::new()
         .route("/v1/agents", get(agents))
         .route("/v1/agent-tasks", get(list).post(create))
+        .route("/v1/agent-tasks/stream", get(super::handoff_stream::stream))
         .route("/v1/agent-tasks/{id}", get(read))
         .route("/v1/agent-tasks/{id}/claim", post(claim))
         .route("/v1/agent-tasks/{id}/renew", post(renew))
