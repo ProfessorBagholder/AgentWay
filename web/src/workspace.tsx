@@ -941,9 +941,7 @@ function HandoffDetail({ id }: { id: string }) {
             been recorded.
           </p>
         )}
-        {["completed", "failed", "timed_out"].includes(
-          row.status,
-        ) &&
+        {["completed", "failed", "timed_out"].includes(row.status) &&
           !row.result_acknowledged_at && (
             <p className="muted">
               Outcome saved. AgentWay has not recorded that {row.sender_name}
