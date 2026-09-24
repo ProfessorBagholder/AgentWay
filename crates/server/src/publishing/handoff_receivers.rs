@@ -117,7 +117,7 @@ impl Publisher {
                 "connection_id":row.connection_id,"product":row.product,"generation":row.generation,"enabled":row.enabled,
                 "verified_at":row.verified_at,"proof_expires_at":row.proof_expires_at,
                 "grok_webhook_configured":grok_webhook_configured,
-                "ready":row.enabled && (row.product != "Grok" || grok_webhook_configured) && row.verified_at.is_some() && row.proof_expires_at.is_some_and(|at| at > chrono::Utc::now().timestamp())
+                "ready":row.enabled && (row.product != "Grok Bot" || grok_webhook_configured) && row.verified_at.is_some() && row.proof_expires_at.is_some_and(|at| at > chrono::Utc::now().timestamp())
                 })
             }
             None => {
@@ -148,7 +148,7 @@ impl Publisher {
         .await?;
         let product = product.ok_or_else(|| unavailable("Connection is unavailable"))?;
         if let Some(key) = grok_key
-            && (product != "Grok"
+            && (product != "Grok Bot"
                 || !super::grok_webhook_adapter::valid_url(target)
                 || key.is_empty()
                 || key.len() > 4096
@@ -338,6 +338,10 @@ mod tests {
     #[tokio::test]
     async fn grok_webhook_enrollment_encrypts_credentials_and_rotation_removes_them() {
         let (_dir, p) = fixture().await;
+        sqlx::query("UPDATE agent_connections SET product='Grok Bot' WHERE id='receiver'")
+            .execute(&p.0.db)
+            .await
+            .unwrap();
         let url = "https://api2.cursor.sh/automations/webhook/probe";
         let key = "private-routine-key";
         assert!(p.enroll_receiver("other", url, Some(key)).await.is_err());

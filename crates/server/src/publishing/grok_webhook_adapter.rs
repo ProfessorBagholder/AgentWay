@@ -59,7 +59,7 @@ pub(super) async fn send_http(
 
 impl DeliveryAdapter for GrokWebhookAdapter {
     fn product(&self) -> Option<&'static str> {
-        Some("Grok")
+        Some("Grok Bot")
     }
 
     async fn send(&self, envelope: &DeliveryEnvelope) -> TransportOutcome {
