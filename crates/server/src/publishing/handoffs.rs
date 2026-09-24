@@ -271,7 +271,7 @@ impl Publisher {
             recipient.ok_or_else(|| forbidden("Recipient is not available or permitted"))?;
         let binding_generations = if input.automatic_delivery {
             let generations: Vec<(String, i64)> = sqlx::query_as(
-                "SELECT b.connection_id,b.generation FROM handoff_receiver_bindings b JOIN agent_connections c ON c.id=b.connection_id WHERE b.connection_id IN (?,?) AND b.enabled=1 AND b.verified_at IS NOT NULL AND b.proof_expires_at>unixepoch() AND c.disconnected=0",
+                "SELECT b.connection_id,b.generation FROM handoff_receiver_bindings b JOIN agent_connections c ON c.id=b.connection_id WHERE b.connection_id IN (?,?) AND b.enabled=1 AND b.verified_at IS NOT NULL AND b.proof_expires_at>unixepoch() AND c.disconnected=0 AND (b.product!='Grok' OR EXISTS(SELECT 1 FROM handoff_grok_webhooks w WHERE w.connection_id=b.connection_id AND w.binding_generation=b.generation))",
             )
             .bind(self.connection_id())
             .bind(&input.recipient_id)
@@ -909,6 +909,9 @@ mod tests {
                 .bind(id).bind(product).bind("encrypted-test-target").bind("test-hash")
                 .bind(generation).execute(&p.0.db).await.unwrap();
         }
+        assert!(sender.create_handoff(input()).await.is_err());
+        sqlx::query("INSERT INTO handoff_grok_webhooks(connection_id,binding_generation,url_ciphertext,key_ciphertext) VALUES('receiver',3,'test-url-ciphertext','test-key-ciphertext')")
+            .execute(&p.0.db).await.unwrap();
         let created = sender.create_handoff(input()).await.unwrap();
         let id = created["id"].as_str().unwrap();
         assert_eq!(created["delivery_mode"], "automatic");

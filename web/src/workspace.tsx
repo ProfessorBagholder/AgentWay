@@ -237,6 +237,159 @@ function AgentDetail({ id }: { id: string }) {
     </>
   );
 }
+interface ReceiverStatus {
+  enabled: boolean;
+  ready: boolean;
+  grok_webhook_configured: boolean;
+  verified_at?: number | null;
+  proof_expires_at?: number | null;
+}
+function GrokReceiverSetup({ id }: { id: string }) {
+  const connections = useConnections();
+  const connection = connections.data?.find((item) => item.id === id);
+  const status = useQuery<ReceiverStatus, Error>({
+    queryKey: ["handoff-receiver", id],
+    queryFn: () => request<ReceiverStatus>(`/api/handoff-receivers/${id}`),
+  });
+  const [url, setUrl] = useState("");
+  const [key, setKey] = useState("");
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const save = useMutation({
+    mutationFn: async () => {
+      await request(`/api/handoff-receivers/${id}`, {
+        native_target: url.trim(),
+        grok_webhook_key: key,
+      });
+    },
+    onSuccess: () => {
+      setUrl("");
+      setKey("");
+      cache.invalidateQueries({ queryKey: ["handoff-receiver", id] });
+    },
+  });
+  const remove = useMutation({
+    mutationFn: async () => {
+      const response = await fetch(`/api/handoff-receivers/${id}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error ?? `Request failed (${response.status})`);
+      }
+    },
+    onSuccess: () => {
+      setConfirmRemove(false);
+      cache.invalidateQueries({ queryKey: ["handoff-receiver", id] });
+    },
+  });
+  if (connections.isPending || status.isPending) return <Loading />;
+  if (connections.error || status.error)
+    return <ErrorMessage error={connections.error || status.error} />;
+  if (
+    !connection ||
+    connection.product !== "Grok" ||
+    connection.state !== "Connected"
+  )
+    return <p role="alert">Grok connection is unavailable.</p>;
+  return (
+    <>
+      <Back to={`agents/${id}`}>{connection.name}</Back>
+      <Heading title="Grok Bot receiver" />
+      <div className="narrow stack">
+        {status.data.enabled && (
+          <section className="panel pad">
+            <h2>Receiver status</h2>
+            <p>
+              {status.data.ready
+                ? "Verified"
+                : status.data.grok_webhook_configured
+                  ? "Saved · Awaiting verification"
+                  : "Webhook not configured"}
+            </p>
+            {status.data.ready && status.data.proof_expires_at && (
+              <p>
+                Verification expires{" "}
+                {new Date(status.data.proof_expires_at * 1000).toLocaleString()}
+                .
+              </p>
+            )}
+          </section>
+        )}
+        <form
+          className="panel pad"
+          onSubmit={(event) => {
+            event.preventDefault();
+            save.mutate();
+          }}
+        >
+          <h2>
+            {status.data.grok_webhook_configured
+              ? "Replace webhook"
+              : "Add webhook"}
+          </h2>
+          <p>
+            Enter the POST URL and key from an active webhook routine in this
+            Bot.
+          </p>
+          <label htmlFor="grok-webhook-url">POST URL</label>
+          <input
+            id="grok-webhook-url"
+            type="url"
+            required
+            autoComplete="off"
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+          />
+          <label htmlFor="grok-webhook-key">Key</label>
+          <input
+            id="grok-webhook-key"
+            type="password"
+            required
+            autoComplete="off"
+            value={key}
+            onChange={(event) => setKey(event.target.value)}
+          />
+          <div className="actions">
+            <button
+              className="primary"
+              disabled={save.isPending || !url || !key}
+            >
+              {save.isPending ? "Saving…" : "Save webhook"}
+            </button>
+          </div>
+          <ErrorMessage error={save.error} />
+        </form>
+        {status.data.enabled && (
+          <section className="panel pad">
+            {confirmRemove ? (
+              <>
+                <h2>Remove receiver?</h2>
+                <p>Pending deliveries to this receiver will stop.</p>
+                <div className="actions">
+                  <button
+                    className="danger"
+                    disabled={remove.isPending}
+                    onClick={() => remove.mutate()}
+                  >
+                    Remove receiver
+                  </button>
+                  <button onClick={() => setConfirmRemove(false)}>
+                    Cancel
+                  </button>
+                </div>
+              </>
+            ) : (
+              <button className="danger" onClick={() => setConfirmRemove(true)}>
+                Remove receiver
+              </button>
+            )}
+            <ErrorMessage error={remove.error} />
+          </section>
+        )}
+      </div>
+    </>
+  );
+}
 function AgentControls({
   connection: c,
   youtube: y,
@@ -302,6 +455,11 @@ function AgentControls({
           status={y}
           connection={c}
         />
+      )}
+      {c.state === "Connected" && c.product === "Grok" && (
+        <a className="button" href={`#/agents/${c.id}/receiver`}>
+          Configure Grok webhook
+        </a>
       )}
       {c.state === "Disconnected" ? (
         <button
@@ -2002,6 +2160,8 @@ export function Workspace({ route }: { route: string }) {
   if (path === "agents") return <Agents />;
   if (path === "agents/access") return <AgentTaskAccess />;
   if (path === "agents/connect") return <ConnectAgent />;
+  if (/^agents\/[^/]+\/receiver$/.test(path))
+    return <GrokReceiverSetup key={path} id={path.split("/")[1]} />;
   if (path.startsWith("agents/"))
     return <AgentDetail key={path} id={path.split("/")[1]} />;
   if (path === "platforms") return <Platforms />;

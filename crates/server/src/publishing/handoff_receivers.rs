@@ -108,12 +108,21 @@ impl Publisher {
         )
         .bind(connection_id).fetch_optional(&self.0.db).await?;
         Ok(match row {
-            Some(row) => json!({
+            Some(row) => {
+                let grok_webhook_configured: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM handoff_grok_webhooks WHERE connection_id=? AND binding_generation=?)",
+                )
+                .bind(&row.connection_id).bind(row.generation).fetch_one(&self.0.db).await?;
+                json!({
                 "connection_id":row.connection_id,"product":row.product,"generation":row.generation,"enabled":row.enabled,
                 "verified_at":row.verified_at,"proof_expires_at":row.proof_expires_at,
-                "ready":row.enabled && row.verified_at.is_some() && row.proof_expires_at.is_some_and(|at| at > chrono::Utc::now().timestamp())
-            }),
-            None => json!({"connection_id":connection_id,"enabled":false,"ready":false}),
+                "grok_webhook_configured":grok_webhook_configured,
+                "ready":row.enabled && (row.product != "Grok" || grok_webhook_configured) && row.verified_at.is_some() && row.proof_expires_at.is_some_and(|at| at > chrono::Utc::now().timestamp())
+                })
+            }
+            None => {
+                json!({"connection_id":connection_id,"enabled":false,"ready":false,"grok_webhook_configured":false})
+            }
         })
     }
 
@@ -339,7 +348,16 @@ mod tests {
         );
         let enrolled = p.enroll_receiver("receiver", url, Some(key)).await.unwrap();
         assert_eq!(enrolled["ready"], false);
-        assert!(!enrolled.to_string().contains(key));
+        assert_eq!(
+            p.receiver_binding_status("receiver").await.unwrap()["grok_webhook_configured"],
+            true
+        );
+        sqlx::query("UPDATE handoff_receiver_bindings SET verified_at=unixepoch(),proof_expires_at=unixepoch()+3600 WHERE connection_id='receiver'")
+            .execute(&p.0.db).await.unwrap();
+        assert_eq!(
+            p.receiver_binding_status("receiver").await.unwrap()["ready"],
+            true
+        );
         let stored: (i64, String, String) = sqlx::query_as("SELECT binding_generation,url_ciphertext,key_ciphertext FROM handoff_grok_webhooks WHERE connection_id='receiver'")
             .fetch_one(&p.0.db).await.unwrap();
         assert_eq!(stored.0, 1);
@@ -347,6 +365,17 @@ mod tests {
         assert!(!stored.2.contains(key));
         assert_eq!(p.0.vault.open_secret(&stored.1).unwrap(), url);
         assert_eq!(p.0.vault.open_secret(&stored.2).unwrap(), key);
+        sqlx::query("DELETE FROM handoff_grok_webhooks WHERE connection_id='receiver'")
+            .execute(&p.0.db)
+            .await
+            .unwrap();
+        assert_eq!(
+            p.receiver_binding_status("receiver").await.unwrap()["ready"],
+            false
+        );
+        sqlx::query("INSERT INTO handoff_grok_webhooks(connection_id,binding_generation,url_ciphertext,key_ciphertext) VALUES('receiver',1,?,?)")
+            .bind(&stored.1).bind(&stored.2).execute(&p.0.db).await.unwrap();
+        assert!(!enrolled.to_string().contains(key));
         p.enroll_receiver("receiver", "new-target", None)
             .await
             .unwrap();
