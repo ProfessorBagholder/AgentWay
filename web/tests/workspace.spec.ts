@@ -108,6 +108,36 @@ test("Grok receiver setup keeps the webhook key private and shows pending verifi
     }),
   );
   let configured = false;
+  await page.route("**/api/agent-handoffs", (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            id: "probe-task",
+            sender_name: "Muse",
+            recipient_id: "grok",
+            delivery_mode: "pull",
+            status: "queued",
+            title: "AgentWay receiver probe",
+            instructions: "Confirm receipt. Do not publish anything.",
+            expires_at: Date.now() / 1000 + 1800,
+          },
+        ],
+        next: null,
+      },
+    }),
+  );
+  await page.route("**/api/handoff-receivers/grok/probe", (route) => {
+    expect(route.request().postDataJSON()).toEqual({ task_id: "probe-task" });
+    return route.fulfill({
+      json: {
+        id: "probe-1",
+        task_id: "probe-task",
+        transport_state: "admitted",
+        task_status: "queued",
+      },
+    });
+  });
   await page.route("**/api/handoff-receivers/grok", async (route) => {
     if (route.request().method() === "POST") {
       const body = route.request().postDataJSON();
@@ -143,6 +173,11 @@ test("Grok receiver setup keeps the webhook key private and shows pending verifi
   await expect(page.getByText("private-key")).toHaveCount(0);
   await expect(page.getByText("private-token")).toHaveCount(0);
   await expect(page.getByLabel("Key", { exact: true })).toHaveValue("");
+  await page.getByLabel("Queued task").selectOption("probe-task");
+  await page.getByRole("button", { name: "Send one test" }).click();
+  await expect(
+    page.getByText("Webhook run started. Check the task for an agent result."),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Remove receiver" }).click();
   await expect(
     page.getByText("Pending deliveries to this receiver will stop."),

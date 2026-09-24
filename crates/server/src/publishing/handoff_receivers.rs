@@ -102,7 +102,7 @@ impl Publisher {
         Ok(found)
     }
 
-    async fn receiver_binding_status(&self, connection_id: &str) -> Result<Value> {
+    pub(super) async fn receiver_binding_status(&self, connection_id: &str) -> Result<Value> {
         let row: Option<BindingStatus> = sqlx::query_as(
             "SELECT b.connection_id,b.product,b.generation,b.enabled,b.verified_at,b.proof_expires_at FROM handoff_receiver_bindings b WHERE b.connection_id=?",
         )

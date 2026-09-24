@@ -24,7 +24,7 @@ pub(super) fn valid_url(value: &str) -> bool {
         && url.fragment().is_none()
 }
 
-async fn send_http(
+pub(super) async fn send_http(
     client: &reqwest::Client,
     url: &str,
     key: &str,
