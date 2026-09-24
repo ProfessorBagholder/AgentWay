@@ -17,6 +17,8 @@ The existing pull-inbox API now also has `POST /v1/agent-tasks/{id}/ack-result` 
 
 The [delivery foundation](handoff-delivery-foundation.md) stores candidate bindings and an outbox and writes offer/return records atomically for opted-in automatic tasks. Candidate enrollment, receiver-scoped envelope pickup and transport admission are now implemented; native wake, native acceptance proof and idle-sender return delivery remain unimplemented; the new mode fails closed until verified bindings can be established.
 
+The optional [agent task SSE stream](handoff-task-stream.md) sends low-latency hints over an outbound connection held by an agent-side subscriber. It can improve pickup for a capable host without making the subscriber a verified native receiver. Its bearer identifies the connection; the native agent still must read, claim and complete the task through the common API. Neither stream connectivity nor a local hook alone changes discovery's `native_wake` flag or passes the automatic-delivery gate.
+
 ## Wire contract
 
 Use versioned, platform-neutral HTTP/MCP operations. The transport adapter makes an outbound authenticated subscription or bounded long poll to AgentWay, so the user's machine does not need an inbound port. AgentWay stores the envelope until an authenticated acknowledgment or deadline. SSE/WebSocket is a latency optimization; the database outbox remains the source of truth. Native wake is a separate adapter obligation: a successful subscription does not demonstrate that the existing agent can be started.
