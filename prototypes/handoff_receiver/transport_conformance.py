@@ -84,6 +84,13 @@ def run() -> None:
                 })
                 sender_transport = Client(agents, sender_binding["receiver_token"])
                 recipient_transport = Client(agents, recipient_binding["receiver_token"])
+                expect_error(409, lambda: sender_agent.request("POST", "/v1/agent-tasks", {
+                    "request_id": str(uuid.uuid4()),
+                    "recipient_id": recipient["id"],
+                    "title": "Unverified receiver test",
+                    "instructions": "No external action.",
+                    "automatic_delivery": True,
+                }))
                 # Synthetic proof in a disposable database only. This bypasses
                 # the production gate to exercise the transport state machine.
                 with sqlite3.connect(db_path) as db:
