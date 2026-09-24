@@ -101,6 +101,7 @@ impl Publisher {
             .merge(super::connections::routes())
             .merge(super::handoffs::admin_routes())
             .merge(super::handoff_receivers::admin_routes())
+            .merge(super::handoff_dispatch::admin_routes())
             .route("/health/media", get(media_health))
             .route("/api/youtube", get(status))
             .route("/api/youtube/config", post(config))
