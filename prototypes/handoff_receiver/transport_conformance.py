@@ -63,7 +63,7 @@ def run() -> None:
                     "product": "Codex", "publish_enabled": False,
                 })
                 recipient = owner(management, "POST", "/api/agent-connections", {
-                    "product": "Grok Bot", "publish_enabled": False,
+                    "product": "Claude", "publish_enabled": False,
                 })
                 sender_agent = Client(agents, owner(
                     management, "POST", f"/api/agent-connections/{sender['id']}/token"
