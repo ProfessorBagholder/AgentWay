@@ -98,7 +98,7 @@ test("Grok receiver setup keeps the webhook key private and shows pending verifi
         {
           id: "grok",
           name: "Grok",
-          product: "Grok",
+          product: "Grok Bot",
           revision: 1,
           state: "Connected",
           publish_enabled: false,
@@ -163,7 +163,11 @@ test("Grok receiver setup keeps the webhook key private and shows pending verifi
     });
   });
   await page.goto("/#/agents/grok");
-  await page.getByRole("link", { name: "Configure Grok webhook" }).click();
+  const configure = page.getByRole("link", {
+    name: "Configure Grok webhook",
+  });
+  await expect(configure).toBeInViewport();
+  await configure.click();
   await page
     .getByLabel("POST URL")
     .fill("https://api2.cursor.sh/automations/webhook/probe");

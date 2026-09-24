@@ -229,6 +229,14 @@ function AgentDetail({ id }: { id: string }) {
       <Heading title={connection.name}>
         <ConnectionBadge c={connection} />
       </Heading>
+      {connection.state === "Connected" &&
+        connection.product === "Grok Bot" && (
+          <div className="narrow agent-receiver-action">
+            <a className="button" href={`#/agents/${connection.id}/receiver`}>
+              Configure Grok webhook
+            </a>
+          </div>
+        )}
       <AgentControls
         key={connection.id}
         connection={connection}
@@ -310,7 +318,7 @@ function GrokReceiverSetup({ id }: { id: string }) {
     return <ErrorMessage error={connections.error || status.error} />;
   if (
     !connection ||
-    connection.product !== "Grok" ||
+    connection.product !== "Grok Bot" ||
     connection.state !== "Connected"
   )
     return <p role="alert">Grok connection is unavailable.</p>;
@@ -539,11 +547,6 @@ function AgentControls({
           status={y}
           connection={c}
         />
-      )}
-      {c.state === "Connected" && c.product === "Grok" && (
-        <a className="button" href={`#/agents/${c.id}/receiver`}>
-          Configure Grok webhook
-        </a>
       )}
       {c.state === "Disconnected" ? (
         <button

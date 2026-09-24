@@ -271,7 +271,7 @@ impl Publisher {
             recipient.ok_or_else(|| forbidden("Recipient is not available or permitted"))?;
         let binding_generations = if input.automatic_delivery {
             let generations: Vec<(String, i64)> = sqlx::query_as(
-                "SELECT b.connection_id,b.generation FROM handoff_receiver_bindings b JOIN agent_connections c ON c.id=b.connection_id WHERE b.connection_id IN (?,?) AND b.enabled=1 AND b.verified_at IS NOT NULL AND b.proof_expires_at>unixepoch() AND c.disconnected=0 AND (b.product!='Grok' OR EXISTS(SELECT 1 FROM handoff_grok_webhooks w WHERE w.connection_id=b.connection_id AND w.binding_generation=b.generation))",
+                "SELECT b.connection_id,b.generation FROM handoff_receiver_bindings b JOIN agent_connections c ON c.id=b.connection_id WHERE b.connection_id IN (?,?) AND b.enabled=1 AND b.verified_at IS NOT NULL AND b.proof_expires_at>unixepoch() AND c.disconnected=0 AND (b.product!='Grok Bot' OR EXISTS(SELECT 1 FROM handoff_grok_webhooks w WHERE w.connection_id=b.connection_id AND w.binding_generation=b.generation))",
             )
             .bind(self.connection_id())
             .bind(&input.recipient_id)
@@ -881,6 +881,10 @@ mod tests {
     #[tokio::test]
     async fn automatic_delivery_requires_two_current_bindings_and_commits_both_directions() {
         let (_dir, p) = fixture().await;
+        sqlx::query("UPDATE agent_connections SET product='Grok Bot' WHERE id='receiver'")
+            .execute(&p.0.db)
+            .await
+            .unwrap();
         sqlx::query(
             "INSERT INTO agent_handoff_grants(sender_id,recipient_id) VALUES('sender','receiver')",
         )
@@ -904,7 +908,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 0);
-        for (id, product, generation) in [("sender", "Muse", 2), ("receiver", "Grok", 3)] {
+        for (id, product, generation) in [("sender", "Muse", 2), ("receiver", "Grok Bot", 3)] {
             sqlx::query("INSERT INTO handoff_receiver_bindings(connection_id,product,target_ciphertext,receiver_secret_hash,generation,enabled,verified_at,proof_expires_at) VALUES(?,?,?, ?,?,1,unixepoch(),unixepoch()+3600)")
                 .bind(id).bind(product).bind("encrypted-test-target").bind("test-hash")
                 .bind(generation).execute(&p.0.db).await.unwrap();

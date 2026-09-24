@@ -69,7 +69,7 @@ impl Publisher {
         let _guard = self.0.mutation.lock().await;
         let mut tx = self.0.db.begin().await?;
         let candidate: Option<(i64, String, String, i64)> = sqlx::query_as(
-            "SELECT b.generation,w.url_ciphertext,w.key_ciphertext,t.expires_at FROM agent_handoffs t JOIN agent_connections c ON c.id=t.recipient_id JOIN handoff_receiver_bindings b ON b.connection_id=c.id JOIN handoff_grok_webhooks w ON w.connection_id=b.connection_id AND w.binding_generation=b.generation WHERE t.id=? AND t.recipient_id=? AND t.delivery_mode='pull' AND t.status='queued' AND t.title=? AND t.instructions=? AND t.expires_at>unixepoch()+60 AND c.product='Grok' AND c.disconnected=0 AND b.product='Grok' AND b.enabled=1 AND b.verified_at IS NULL AND EXISTS(SELECT 1 FROM agent_handoff_grants g WHERE g.sender_id=t.sender_id AND g.recipient_id=t.recipient_id)",
+            "SELECT b.generation,w.url_ciphertext,w.key_ciphertext,t.expires_at FROM agent_handoffs t JOIN agent_connections c ON c.id=t.recipient_id JOIN handoff_receiver_bindings b ON b.connection_id=c.id JOIN handoff_grok_webhooks w ON w.connection_id=b.connection_id AND w.binding_generation=b.generation WHERE t.id=? AND t.recipient_id=? AND t.delivery_mode='pull' AND t.status='queued' AND t.title=? AND t.instructions=? AND t.expires_at>unixepoch()+60 AND c.product='Grok Bot' AND c.disconnected=0 AND b.product='Grok Bot' AND b.enabled=1 AND b.verified_at IS NULL AND EXISTS(SELECT 1 FROM agent_handoff_grants g WHERE g.sender_id=t.sender_id AND g.recipient_id=t.recipient_id)",
         )
         .bind(task_id).bind(connection_id).bind(TITLE).bind(INSTRUCTIONS)
         .fetch_optional(&mut *tx).await?;
@@ -181,7 +181,7 @@ mod tests {
         let p = Publisher::new(db, dir.path().join("publishing"), CancellationToken::new())
             .await
             .unwrap();
-        for (id, product) in [("sender", "Muse"), ("receiver", "Grok")] {
+        for (id, product) in [("sender", "Muse"), ("receiver", "Grok Bot")] {
             sqlx::query("INSERT INTO agent_connections(id,name,product,token,publish_enabled) VALUES(?,?,?,?,0)")
                 .bind(id).bind(product).bind(product).bind("encrypted-test-token")
                 .execute(&p.0.db).await.unwrap();
@@ -192,7 +192,7 @@ mod tests {
         .execute(&p.0.db)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO handoff_receiver_bindings(connection_id,product,target_ciphertext,receiver_secret_hash,generation,enabled) VALUES('receiver','Grok','encrypted-target','hash',1,1)")
+        sqlx::query("INSERT INTO handoff_receiver_bindings(connection_id,product,target_ciphertext,receiver_secret_hash,generation,enabled) VALUES('receiver','Grok Bot','encrypted-target','hash',1,1)")
             .execute(&p.0.db).await.unwrap();
         sqlx::query("INSERT INTO handoff_grok_webhooks(connection_id,binding_generation,url_ciphertext,key_ciphertext) VALUES('receiver',1,?,?)")
             .bind(p.0.vault.seal("https://api2.cursor.sh/automations/webhook/test").unwrap())
