@@ -44,6 +44,8 @@ export interface AgentHandoff {
     "queued" | "claimed" | "completed" | "failed" | "cancelled" | "timed_out";
   result: string | null;
   error: string | null;
+  result_acknowledged_at?: string | null;
+  delivery_mode?: "pull" | "automatic";
   lease_until: number | null;
   timeout_seconds: number | null;
   expires_at: number | null;
@@ -75,7 +77,7 @@ function useHandoffs() {
   };
 }
 const handoffStates: Record<AgentHandoff["status"], string> = {
-  queued: "Queued",
+  queued: "Awaiting pickup",
   claimed: "In progress",
   completed: "Completed",
   failed: "Needs attention",
@@ -933,6 +935,21 @@ function HandoffDetail({ id }: { id: string }) {
         <Badge value={handoffStates[row.status]} />
       </Heading>
       <div className="narrow stack">
+        {row.status === "queued" && row.delivery_mode !== "automatic" && (
+          <p className="muted">
+            Waiting for {row.recipient_name} to check AgentWay. No pickup has
+            been recorded.
+          </p>
+        )}
+        {["completed", "failed", "timed_out"].includes(
+          row.status,
+        ) &&
+          !row.result_acknowledged_at && (
+            <p className="muted">
+              Outcome saved. AgentWay has not recorded that {row.sender_name}
+              read it.
+            </p>
+          )}
         <section className="panel pad">
           <dl>
             <dt>From</dt>

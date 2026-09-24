@@ -465,6 +465,8 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
     let response = mcp_json(init).await;
     assert!(response["result"]["capabilities"]["tools"].is_object());
     assert_eq!(response["result"]["instructions"], guidance::INSTRUCTIONS);
+    assert!(guidance::INSTRUCTIONS.contains("AgentWay guidance, version 18."));
+    assert!(guidance::INSTRUCTIONS.contains("AgentWay cannot wake its existing conversation"));
     let status: Value = client
         .get(url.replace("/mcp", "/v1/status"))
         .bearer_auth(&token)
@@ -479,6 +481,19 @@ async fn mcp_negotiates_lists_tools_and_calls_the_publisher() {
     assert_eq!(
         status["agent_guidance"],
         guidance::payload(MAX_MEDIA * 5, MAX_MEDIA)
+    );
+    assert_eq!(status["agent_guidance"]["version"], "18");
+    assert_eq!(
+        status["agent_guidance"]["handoff_delivery"]["mode"],
+        "pull_inbox"
+    );
+    assert_eq!(
+        status["agent_guidance"]["handoff_delivery"]["native_wake_available"],
+        false
+    );
+    assert_eq!(
+        status["agent_guidance"]["agent_task_list_schema"]["$defs"]["TaskDirection"]["enum"],
+        json!(["incoming", "outgoing"])
     );
     let required = status["agent_guidance"]["publish_schema"]["required"]
         .as_array()

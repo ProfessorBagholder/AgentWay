@@ -1,10 +1,10 @@
 # AgentWay receiver contract
 
-Status: common requirements for feasibility testing, 2026-09-23. **Full receiver wire routes and schemas are not yet frozen; a pull-inbox sender receipt and automatic-delivery storage foundation exist, but no native receiver has passed the complete suite.** This document specifies what **every** agent must do to participate in handoffs. The [architecture](handoff-delivery-architecture.md) owns the system design; the [compatibility matrix](handoff-receiver-compatibility.md) records whether each product can host a compliant receiver. The [conformance runbook](handoff-conformance-v1.md) is the same test for every product.
+Status: automatic native-delivery requirements, 2026-09-24. **The supported common mode is a truthful pull inbox; the receiver wire routes and schemas below are not yet frozen, and no native receiver has passed the complete suite.** This document specifies what every agent must do to participate in a future **automatic** handoff. The [architecture](handoff-delivery-architecture.md) owns the system design; the [compatibility matrix](handoff-receiver-compatibility.md) records whether each product can host a compliant receiver. The [conformance runbook](handoff-conformance-v1.md) is the same automatic-delivery test for every product.
 
 ## Product boundary
 
-AgentWay is the durable coordinator. An agent integration is both a sender and a receiver, regardless of whether the user's agent is Muse, Grok Bot, Codex, Claude or ChatGPT. Every integration uses the same AgentWay task API, permission checks, delivery envelope, acknowledgment rules, deadlines, error taxonomy and result route. A provider-specific edge may use a different native trigger to start its existing agent, but it may not invent different task semantics. A connected publishing agent is not implicitly handoff-ready.
+AgentWay is the durable coordinator. Every connected agent can use the same pull task API, permission checks, acknowledgment rules, deadlines, error taxonomy and result route; the agent must check for work while active. This document's delivery envelope and receiver binding apply only to the future automatic mode. A provider-specific edge may use a different native trigger to start its existing agent, but it may not invent different task semantics. A connected publishing agent is not implicitly **automatic-handoff-ready**.
 
 The receiver has two distinct actors:
 

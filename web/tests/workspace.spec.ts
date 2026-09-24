@@ -90,7 +90,7 @@ test.beforeEach(async ({ page }) => {
 });
 test("agent handoff appears in Tasks and its result updates in place", async ({
   page,
-}) => {
+}, testInfo) => {
   const task = {
     cursor: 1,
     id: "handoff-1",
@@ -102,6 +102,8 @@ test("agent handoff appears in Tasks and its result updates in place", async ({
     title: "Review episode",
     instructions: "Check the transcript",
     status: "queued",
+    delivery_mode: "pull",
+    result_acknowledged_at: null,
     result: null,
     error: null,
     lease_until: null,
@@ -137,10 +139,36 @@ test("agent handoff appears in Tasks and its result updates in place", async ({
       },
     }),
   );
-  await page.goto("/#/tasks");
   const row = page.getByRole("row", { name: /Review episode/ });
-  await expect(row).toContainText("Muse");
-  await expect(row).toContainText("Grok");
+  for (const theme of ["dark", "light"]) {
+    await page.goto("/#/settings");
+    await page
+      .getByRole("radio", { name: theme === "dark" ? "Dark" : "Light" })
+      .check();
+    for (const width of [1440, 900, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/#/tasks");
+      await expect(row).toContainText("Muse");
+      await expect(row).toContainText("Grok");
+      await expect(row).toContainText("Awaiting pickup");
+      await row.getByRole("link", { name: "Review episode" }).click();
+      await expect(
+        page.getByText(
+          "Waiting for Grok to check AgentWay. No pickup has been recorded.",
+        ),
+      ).toBeVisible();
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth > innerWidth,
+        ),
+      ).toBe(false);
+      await page.screenshot({
+        path: testInfo.outputPath(`${theme}-${width}-awaiting-pickup.png`),
+        fullPage: true,
+      });
+    }
+  }
+  await page.goto("/#/tasks");
   await page.evaluate(
     (t) =>
       (window as any).testEvents.dispatchEvent(

@@ -47,7 +47,7 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "Create a task in a permitted agent's inbox. Use a stable request_id UUID and identical arguments on retries. Optional timeout_seconds sets a server-enforced deadline (60–604800 seconds; default 86400). The recipient must claim and complete before it. Tell the user that queued is not delivered or accepted."
+        description = "Create a task in a permitted agent's pull inbox. Omit automatic_delivery: native wake is not currently available. Use a stable request_id UUID and identical arguments on retries. Optional timeout_seconds sets a server-enforced deadline (60–604800 seconds; default 86400). Tell the user that queued is stored, not delivered or accepted."
     )]
     async fn create_agent_task(
         &self,
@@ -61,7 +61,7 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "List tasks sent to or received by this connection. Poll this inbox for incoming work; filter status=queued or claimed and follow next with before to page. Status can be queued, claimed, completed, failed, cancelled or timed_out. Stop sender polling on any terminal status, including timed_out."
+        description = "List this connection's tasks. direction=incoming finds work addressed to this agent; direction=outgoing finds tasks it sent. Filter status=queued for unclaimed incoming work, or page through outgoing tasks to inspect results. Follow next with before until the page set is complete. Listing is a pull check, not a native wake."
     )]
     async fn list_agent_tasks(
         &self,
@@ -69,7 +69,12 @@ impl PublishingTools {
         Parameters(input): Parameters<handoffs::ListHandoffs>,
     ) -> Result<rmcp::Json<Value>, String> {
         self.publisher_for(&ctx)?
-            .list_handoffs(input.status.as_deref(), input.before, false)
+            .list_handoffs(
+                input.status.as_deref(),
+                input.before,
+                input.direction,
+                false,
+            )
             .await
             .map(rmcp::Json)
             .map_err(|e| e.to_string())

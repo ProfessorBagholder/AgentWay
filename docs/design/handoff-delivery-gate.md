@@ -1,14 +1,14 @@
 # Agent handoff delivery gate
 
-Status: design and integration proof, 2026-09-23. The current feature branch is **not** a complete cross-agent handoff release.
+Status: revised pull-inbox product contract, 2026-09-24. The current feature branch supports a common, truthful pull handoff; **automatic native delivery remains unverified**.
 
 See [prior-art research](handoff-prior-art.md) and the [receiver architecture proposal](handoff-delivery-architecture.md) for existing systems, the proposed implementation, and the product-specific proof still needed.
 
 ## Product contract
 
-Every agent offered as a handoff recipient must have the same observable behavior: AgentWay accepts an authorized task, the intended agent receives it without the user relaying it, acknowledges or rejects it, and reports a result or actionable failure. Internal delivery mechanisms may differ, but the task states, timeout policy, audit trail, and recovery must not. A connected MCP credential proves that an agent can call AgentWay; it does not prove AgentWay can start a turn in that agent.
+Every connected agent may use the same permissioned pull inbox: AgentWay stores an authorized task; the recipient sees it when that agent next checks AgentWay, claims it under its own credential, and records a result or failure. The sender sees the result when it next checks and acknowledges only after reading it. Both sides use the same task states, timeout policy, audit trail and recovery. Discovery and UI must say that queued means awaiting pickup, not unattended delivery or acceptance. Initial guidance must describe finite checks and avoid creating an unbounded routine. A connected MCP credential proves that an agent can call AgentWay; it does not prove AgentWay can start a turn in that agent.
 
-Connection authentication and handoff readiness are separate facts. Handoff readiness is earned only by a live unattended test for that exact product and connection. Discovery and grant creation must exclude recipients that are not ready; the UI must not offer a task-access control that creates undeliverable work. Existing queued work must remain visible and recoverable if readiness later fails. Do not rename a merely queued task to “delivered.”
+Connection authentication and **automatic** handoff readiness are separate facts. Native wake is earned only by a live unattended test for that exact product and connection. Discovery may offer a connected recipient for pull-inbox work, with that delivery mode explicit; it must exclude recipients without verified readiness from any automatic delivery option. Existing queued work remains visible and recoverable. Never rename a merely queued task to “delivered.”
 
 ## Current evidence
 
@@ -21,7 +21,7 @@ Connection authentication and handoff readiness are separate facts. Handoff read
 
 Sources: [Grok Bot collaboration](https://docs.x.ai/grok-bot/chat-and-collaboration), [Grok custom MCP connectors](https://docs.x.ai/grok/connectors), [Muse product capabilities](https://ai.meta.com/muse/), [Claude scheduled tasks](https://support.claude.com/en/articles/13854387-schedule-recurring-tasks-in-claude-cowork), [MCP protocol changes](https://blog.modelcontextprotocol.io/posts/2026-07-28/). These sources describe ways agents work or call tools; none is evidence that AgentWay can wake an existing third-party conversation. The Codex active-writer and ephemeral-session findings are local probes, not a published support guarantee.
 
-## Architecture required before release
+## Architecture required before automatic delivery
 
 1. Define one [versioned receiver contract](handoff-receiver-contract.md) shared by every agent, instantiated per connection: destination binding, authenticated delivery or pickup, receipt/acknowledgment, heartbeat or liveness, cancellation, completion/failure, and a maximum pickup latency. A bearer token alone is an identity, not a receiver registration.
 2. Persist a delivery outbox in the same transaction as task creation. A dispatcher retries with bounded backoff and idempotency, records attempts and safe errors, and never confuses a successful HTTP/MCP call with agent acceptance. A stale receiver becomes unavailable before new work is assigned.
@@ -33,4 +33,4 @@ The current pull inbox remains useful as durable storage and a diagnostic surfac
 
 ## Release decision
 
-Keep this branch unmerged as a test integration until one common receiver contract and live, equal-behavior integrations are proven for every agent product in the advertised handoff scope. A two-product round trip is an intermediate proof, not a platform-wide release gate. If one offered product cannot meet the contract, do not ship a privileged subset or silently lower the standard; resolve the scope with the owner first. Shipping authenticated connections and publishing without handoffs remains valid; publishing connection status must not imply handoff readiness.
+The pull-inbox mode can be reviewed as a common capability across connected agents, provided its status and guidance remain truthful and the same operational rules apply to all. Do not release **automatic** handoffs until native ingress and return delivery pass the common conformance suite for every product offered in that mode. A two-product round trip is an intermediate proof, not a platform-wide automatic-delivery release gate. Publishing connection status must not imply automatic handoff readiness.

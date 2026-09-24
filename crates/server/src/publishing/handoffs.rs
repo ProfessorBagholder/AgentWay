@@ -139,6 +139,7 @@ pub(super) struct TaskFinish {
 struct ListQuery {
     status: Option<String>,
     before: Option<i64>,
+    direction: Option<TaskDirection>,
 }
 #[derive(Deserialize)]
 struct HistoryQuery {
@@ -150,6 +151,14 @@ pub(super) struct ListHandoffs {
     pub status: Option<String>,
     /// Cursor returned in next by the previous page.
     pub before: Option<i64>,
+    /// incoming: tasks addressed to this connection; outgoing: tasks it sent. Omit for both.
+    pub direction: Option<TaskDirection>,
+}
+#[derive(Debug, Clone, Copy, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum TaskDirection {
+    Incoming,
+    Outgoing,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -213,7 +222,7 @@ impl Publisher {
         let rows: Vec<(String, String, String)> = sqlx::query_as(
             "SELECT c.id,c.name,c.product FROM agent_handoff_grants g JOIN agent_connections c ON c.id=g.recipient_id WHERE g.sender_id=? AND c.disconnected=0 ORDER BY c.name,c.id")
             .bind(self.connection_id()).fetch_all(&self.0.db).await?;
-        Ok(json!(rows.into_iter().map(|(id,name,product)| json!({"id":id,"name":name,"product":product,"delivery":"inbox"})).collect::<Vec<_>>()))
+        Ok(json!(rows.into_iter().map(|(id,name,product)| json!({"id":id,"name":name,"product":product,"delivery":"inbox","native_wake":false})).collect::<Vec<_>>()))
     }
     pub(super) async fn create_handoff(&self, input: CreateHandoff) -> Result<Value> {
         Uuid::parse_str(&input.request_id)?;
@@ -421,6 +430,7 @@ impl Publisher {
         &self,
         status: Option<&str>,
         before: Option<i64>,
+        direction: Option<TaskDirection>,
         owner: bool,
     ) -> Result<Value> {
         if let Some(s) = status
@@ -441,9 +451,17 @@ impl Publisher {
         if before < 1 {
             bail!("Invalid cursor");
         }
-        let mut rows: Vec<Handoff> = if owner {
+        let mut rows: Vec<Handoff> = if owner && direction.is_some() {
+            bail!("Direction filter is only available to agents");
+        } else if owner {
             sqlx::query_as("SELECT rowid AS cursor,* FROM agent_handoffs WHERE rowid<? AND (? IS NULL OR status=?) ORDER BY rowid DESC LIMIT 101")
                 .bind(before).bind(status).bind(status).fetch_all(&self.0.db).await?
+        } else if matches!(direction, Some(TaskDirection::Incoming)) {
+            sqlx::query_as("SELECT rowid AS cursor,* FROM agent_handoffs WHERE rowid<? AND recipient_id=? AND (? IS NULL OR status=?) ORDER BY rowid DESC LIMIT 101")
+                .bind(before).bind(self.connection_id()).bind(status).bind(status).fetch_all(&self.0.db).await?
+        } else if matches!(direction, Some(TaskDirection::Outgoing)) {
+            sqlx::query_as("SELECT rowid AS cursor,* FROM agent_handoffs WHERE rowid<? AND sender_id=? AND (? IS NULL OR status=?) ORDER BY rowid DESC LIMIT 101")
+                .bind(before).bind(self.connection_id()).bind(status).bind(status).fetch_all(&self.0.db).await?
         } else {
             sqlx::query_as("SELECT rowid AS cursor,* FROM agent_handoffs WHERE rowid<? AND (sender_id=? OR recipient_id=?) AND (? IS NULL OR status=?) ORDER BY rowid DESC LIMIT 101")
                 .bind(before).bind(self.connection_id()).bind(self.connection_id()).bind(status).bind(status).fetch_all(&self.0.db).await?
@@ -636,7 +654,7 @@ async fn create(
 }
 async fn list(http::AgentState(p): http::AgentState, Query(q): Query<ListQuery>) -> Api<Value> {
     Ok(Json(
-        p.list_handoffs(q.status.as_deref(), q.before, false)
+        p.list_handoffs(q.status.as_deref(), q.before, q.direction, false)
             .await?,
     ))
 }
@@ -694,7 +712,8 @@ async fn ack_result(
 }
 async fn owner_list(State(p): State<Publisher>, Query(q): Query<ListQuery>) -> Api<Value> {
     Ok(Json(
-        p.list_handoffs(q.status.as_deref(), q.before, true).await?,
+        p.list_handoffs(q.status.as_deref(), q.before, q.direction, true)
+            .await?,
     ))
 }
 async fn owner_get(State(p): State<Publisher>, Path(id): Path<String>) -> Api<Value> {
@@ -1116,6 +1135,10 @@ mod tests {
         assert_eq!(listed[0].sender_id, "sender");
         assert_eq!(listed[0].recipient_id, "receiver");
         assert_eq!(sender.discover_agents().await.unwrap()[0]["id"], "receiver");
+        assert_eq!(
+            sender.discover_agents().await.unwrap()[0]["native_wake"],
+            false
+        );
         let created = sender.create_handoff(input()).await.unwrap();
         assert_eq!(created["delivery_mode"], "pull");
         let pull_deliveries: i64 =
@@ -1134,7 +1157,39 @@ mod tests {
         assert_eq!(sender.create_handoff(input()).await.unwrap(), created);
         assert_eq!(
             receiver
-                .list_handoffs(Some("queued"), None, false)
+                .list_handoffs(Some("queued"), None, Some(TaskDirection::Incoming), false)
+                .await
+                .unwrap()["items"][0]["id"],
+            created["id"]
+        );
+        assert_eq!(
+            sender
+                .list_handoffs(Some("queued"), None, Some(TaskDirection::Outgoing), false)
+                .await
+                .unwrap()["items"][0]["id"],
+            created["id"]
+        );
+        assert!(
+            receiver
+                .list_handoffs(Some("queued"), None, Some(TaskDirection::Outgoing), false)
+                .await
+                .unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            sender
+                .list_handoffs(Some("queued"), None, Some(TaskDirection::Incoming), false)
+                .await
+                .unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            receiver
+                .list_handoffs(Some("queued"), None, None, false)
                 .await
                 .unwrap()["items"][0]["id"],
             created["id"]
