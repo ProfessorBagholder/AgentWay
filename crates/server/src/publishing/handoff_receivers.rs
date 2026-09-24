@@ -21,6 +21,8 @@ pub(super) struct ReceiverIdentity {
 #[serde(deny_unknown_fields)]
 struct EnrollInput {
     native_target: String,
+    #[serde(default)]
+    grok_webhook_key: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -115,7 +117,12 @@ impl Publisher {
         })
     }
 
-    async fn enroll_receiver(&self, connection_id: &str, target: &str) -> Result<Value> {
+    async fn enroll_receiver(
+        &self,
+        connection_id: &str,
+        target: &str,
+        grok_key: Option<&str>,
+    ) -> Result<Value> {
         if target.trim().is_empty() || target.len() > 1024 || target.chars().any(char::is_control) {
             return Err(invalid("Invalid native target reference"));
         }
@@ -131,6 +138,15 @@ impl Publisher {
         .fetch_optional(&mut *tx)
         .await?;
         let product = product.ok_or_else(|| unavailable("Connection is unavailable"))?;
+        if let Some(key) = grok_key
+            && (product != "Grok"
+                || !super::grok_webhook_adapter::valid_url(target)
+                || key.is_empty()
+                || key.len() > 4096
+                || key.chars().any(char::is_whitespace))
+        {
+            return Err(invalid("Invalid Grok webhook configuration"));
+        }
         let generation: i64 = sqlx::query_scalar(
             "SELECT COALESCE((SELECT generation+1 FROM handoff_receiver_bindings WHERE connection_id=?),1)",
         )
@@ -140,6 +156,15 @@ impl Publisher {
             .execute(&mut *tx).await?;
         sqlx::query("UPDATE handoff_delivery_outbox SET state='blocked',safe_error_code=CASE WHEN state='admitted' THEN 'native_outcome_unknown' ELSE 'binding_stale' END,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=? AND binding_generation<>? AND state IN ('pending','admitted')")
             .bind(connection_id).bind(generation).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM handoff_grok_webhooks WHERE connection_id=?")
+            .bind(connection_id)
+            .execute(&mut *tx)
+            .await?;
+        if let Some(key) = grok_key {
+            sqlx::query("INSERT INTO handoff_grok_webhooks(connection_id,binding_generation,url_ciphertext,key_ciphertext) VALUES(?,?,?,?)")
+                .bind(connection_id).bind(generation).bind(self.0.vault.seal(target)?).bind(self.0.vault.seal(key)?)
+                .execute(&mut *tx).await?;
+        }
         tx.commit().await?;
         Ok(
             json!({"connection_id":connection_id,"generation":generation,"receiver_token":token,"enabled":true,"ready":false}),
@@ -156,6 +181,10 @@ impl Publisher {
         }
         sqlx::query("UPDATE handoff_delivery_outbox SET state='blocked',safe_error_code=CASE WHEN state='admitted' THEN 'native_outcome_unknown' ELSE 'receiver_unavailable' END,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE connection_id=? AND state IN ('pending','admitted')")
             .bind(connection_id).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM handoff_grok_webhooks WHERE connection_id=?")
+            .bind(connection_id)
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
         self.receiver_binding_status(connection_id).await
     }
@@ -245,7 +274,10 @@ async fn enroll(
     Path(id): Path<String>,
     Json(input): Json<EnrollInput>,
 ) -> Api<Value> {
-    Ok(Json(p.enroll_receiver(&id, &input.native_target).await?))
+    Ok(Json(
+        p.enroll_receiver(&id, &input.native_target, input.grok_webhook_key.as_deref())
+            .await?,
+    ))
 }
 async fn disable(State(p): State<Publisher>, Path(id): Path<String>) -> Api<Value> {
     Ok(Json(p.disable_receiver(&id).await?))
@@ -295,10 +327,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn grok_webhook_enrollment_encrypts_credentials_and_rotation_removes_them() {
+        let (_dir, p) = fixture().await;
+        let url = "https://api2.cursor.sh/automations/webhook/probe";
+        let key = "private-routine-key";
+        assert!(p.enroll_receiver("other", url, Some(key)).await.is_err());
+        assert!(
+            p.enroll_receiver("receiver", "https://127.0.0.1/probe", Some(key))
+                .await
+                .is_err()
+        );
+        let enrolled = p.enroll_receiver("receiver", url, Some(key)).await.unwrap();
+        assert_eq!(enrolled["ready"], false);
+        assert!(!enrolled.to_string().contains(key));
+        let stored: (i64, String, String) = sqlx::query_as("SELECT binding_generation,url_ciphertext,key_ciphertext FROM handoff_grok_webhooks WHERE connection_id='receiver'")
+            .fetch_one(&p.0.db).await.unwrap();
+        assert_eq!(stored.0, 1);
+        assert!(!stored.1.contains(url));
+        assert!(!stored.2.contains(key));
+        assert_eq!(p.0.vault.open_secret(&stored.1).unwrap(), url);
+        assert_eq!(p.0.vault.open_secret(&stored.2).unwrap(), key);
+        p.enroll_receiver("receiver", "new-target", None)
+            .await
+            .unwrap();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM handoff_grok_webhooks WHERE connection_id='receiver'",
+        )
+        .fetch_one(&p.0.db)
+        .await
+        .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
     async fn enrollment_separates_receiver_secret_and_rotation_fences_old_delivery() {
         let (_dir, p) = fixture().await;
         let first = p
-            .enroll_receiver("receiver", "native-private-target")
+            .enroll_receiver("receiver", "native-private-target", None)
             .await
             .unwrap();
         let first_token = first["receiver_token"].as_str().unwrap();
@@ -331,7 +396,7 @@ mod tests {
         sqlx::query("INSERT INTO handoff_delivery_outbox(id,task_id,kind,connection_id,binding_generation,expires_at) VALUES(?,?,'task_offered','receiver',1,unixepoch()+3600)")
             .bind(Uuid::new_v4().to_string()).bind(&task_id).execute(&p.0.db).await.unwrap();
         let second = p
-            .enroll_receiver("receiver", "different-target")
+            .enroll_receiver("receiver", "different-target", None)
             .await
             .unwrap();
         assert_eq!(second["generation"], 2);
@@ -360,13 +425,16 @@ mod tests {
     #[tokio::test]
     async fn transport_admission_is_scoped_and_does_not_accept_task() {
         let (_dir, p) = fixture().await;
-        let enrolled = p.enroll_receiver("receiver", "target").await.unwrap();
+        let enrolled = p.enroll_receiver("receiver", "target", None).await.unwrap();
         let receiver = p
             .authenticate_receiver(enrolled["receiver_token"].as_str().unwrap())
             .await
             .unwrap()
             .unwrap();
-        let other = p.enroll_receiver("other", "another-target").await.unwrap();
+        let other = p
+            .enroll_receiver("other", "another-target", None)
+            .await
+            .unwrap();
         let other = p
             .authenticate_receiver(other["receiver_token"].as_str().unwrap())
             .await
@@ -482,7 +550,7 @@ mod tests {
         use axum::{body::Body, http::Request};
         use tower::ServiceExt;
         let (_dir, p) = fixture().await;
-        let enrolled = p.enroll_receiver("receiver", "target").await.unwrap();
+        let enrolled = p.enroll_receiver("receiver", "target", None).await.unwrap();
         let receiver_token = enrolled["receiver_token"].as_str().unwrap();
         let call = |path: &str, token: &str| {
             Request::builder()
