@@ -22,6 +22,7 @@ jobs:
       - run: cargo test --locked --workspace
       - run: npm ci --prefix web && npm run format:check --prefix web && npm run build --prefix web
       - run: ./run --no-open
+      - run: cargo build --locked -p agentway-server && python3 prototypes/handoff_receiver/transport_conformance.py
       - run: python3 tests/architecture/resumable_integration.py
       - run: npx playwright install --with-deps chromium
         working-directory: web
