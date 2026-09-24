@@ -10,6 +10,9 @@ use sha2::{Digest, Sha256};
 
 type Api<T> = std::result::Result<Json<T>, http::Error>;
 const LEASE_SECONDS: i64 = 300;
+const DEFAULT_TIMEOUT_SECONDS: i64 = 86_400;
+const MIN_TIMEOUT_SECONDS: i64 = 60;
+const MAX_TIMEOUT_SECONDS: i64 = 604_800;
 #[derive(Debug)]
 pub(super) struct HandoffError {
     pub status: StatusCode,
@@ -62,6 +65,8 @@ pub(super) struct Handoff {
     #[sqlx(rename = "claim_hash")]
     _claim_hash: Option<String>,
     pub lease_until: Option<i64>,
+    pub timeout_seconds: Option<i64>,
+    pub expires_at: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
     pub revision: i64,
@@ -76,6 +81,8 @@ pub(super) struct CreateHandoff {
     pub recipient_id: String,
     pub title: String,
     pub instructions: String,
+    /// Maximum lifetime in seconds, from creation through completion. Defaults to 24 hours; range 60 seconds to 7 days.
+    pub timeout_seconds: Option<i64>,
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -161,6 +168,19 @@ fn claim_digest(token: &str) -> String {
 }
 
 impl Publisher {
+    pub(super) async fn handoff_deadline_worker(&self) {
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            tokio::select! {
+                _ = self.0.shutdown.cancelled() => return,
+                _ = interval.tick() => {
+                    if let Err(error) = self.expire_handoffs().await {
+                        tracing::error!(%error, "Could not expire agent handoffs");
+                    }
+                }
+            }
+        }
+    }
     pub(super) async fn discover_agents(&self) -> Result<Value> {
         let rows: Vec<(String, String, String)> = sqlx::query_as(
             "SELECT c.id,c.name,c.product FROM agent_handoff_grants g JOIN agent_connections c ON c.id=g.recipient_id WHERE g.sender_id=? AND c.disconnected=0 ORDER BY c.name,c.id")
@@ -172,9 +192,14 @@ impl Publisher {
         if !valid_text(&input.title, 200) || !valid_text(&input.instructions, 16_000) {
             bail!("Task title or instructions are empty or too long");
         }
+        let timeout = input.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
+        if !(MIN_TIMEOUT_SECONDS..=MAX_TIMEOUT_SECONDS).contains(&timeout) {
+            bail!("timeout_seconds must be between 60 and 604800");
+        }
         if self.connection_id() == input.recipient_id {
             bail!("Choose another agent");
         }
+        self.expire_handoffs().await?;
         let _guard = self.0.mutation.lock().await;
         let mut tx = self.0.db.begin().await?;
         if let Some(existing) = sqlx::query_as::<_, Handoff>(
@@ -188,6 +213,8 @@ impl Publisher {
             if existing.recipient_id != input.recipient_id
                 || existing.title != input.title
                 || existing.instructions != input.instructions
+                || (existing.timeout_seconds.is_some() && existing.timeout_seconds != Some(timeout))
+                || (existing.timeout_seconds.is_none() && input.timeout_seconds.is_some())
             {
                 return Err(conflict("request_id already belongs to a different task"));
             }
@@ -204,9 +231,10 @@ impl Publisher {
         let recipient =
             recipient.ok_or_else(|| forbidden("Recipient is not available or permitted"))?;
         let id = Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO agent_handoffs(id,request_id,sender_id,sender_name,recipient_id,recipient_name,title,instructions) VALUES(?,?,?,?,?,?,?,?)")
+        sqlx::query("INSERT INTO agent_handoffs(id,request_id,sender_id,sender_name,recipient_id,recipient_name,title,instructions,timeout_seconds,expires_at) VALUES(?,?,?,?,?,?,?,?,?,unixepoch()+?)")
             .bind(&id).bind(&input.request_id).bind(self.connection_id()).bind(sender.0)
             .bind(&input.recipient_id).bind(recipient.0).bind(&input.title).bind(&input.instructions)
+            .bind(timeout).bind(timeout)
             .execute(&mut *tx).await?;
         let row = Self::handoff_in_tx(&mut tx, &id).await?;
         Self::handoff_event(&mut tx, &row, "created").await?;
@@ -234,6 +262,29 @@ impl Publisher {
             .await?;
         Ok(())
     }
+    /// Materialize elapsed deadlines in the same transaction as their audit events.
+    /// Called by the independent sweeper and before reads; late writes are fenced in SQL.
+    pub(super) async fn expire_handoffs(&self) -> Result<usize> {
+        let mut total = 0;
+        loop {
+            let mut tx = self.0.db.begin().await?;
+            // The first statement writes, avoiding a deferred read transaction that
+            // could become a stale SQLite snapshot under concurrent API traffic.
+            let ids: Vec<String> = sqlx::query_scalar("UPDATE agent_handoffs SET status='timed_out',error=CASE WHEN status='queued' THEN 'Recipient did not claim the task before its deadline.' ELSE 'Task deadline passed after claim; external effects may be unknown.' END,claim_hash=NULL,lease_until=NULL,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),revision=revision+1 WHERE id IN (SELECT id FROM agent_handoffs WHERE status IN ('queued','claimed') AND expires_at IS NOT NULL AND expires_at<=unixepoch() ORDER BY expires_at LIMIT 100) AND status IN ('queued','claimed') AND expires_at<=unixepoch() RETURNING id")
+            .fetch_all(&mut *tx)
+            .await?;
+            let batch_size = ids.len();
+            for id in ids {
+                let row = Self::handoff_in_tx(&mut tx, &id).await?;
+                Self::handoff_event(&mut tx, &row, "timed_out").await?;
+            }
+            tx.commit().await?;
+            total += batch_size;
+            if batch_size < 100 {
+                return Ok(total);
+            }
+        }
+    }
     pub(super) async fn list_handoffs(
         &self,
         status: Option<&str>,
@@ -241,10 +292,19 @@ impl Publisher {
         owner: bool,
     ) -> Result<Value> {
         if let Some(s) = status
-            && !["queued", "claimed", "completed", "failed", "cancelled"].contains(&s)
+            && ![
+                "queued",
+                "claimed",
+                "completed",
+                "failed",
+                "cancelled",
+                "timed_out",
+            ]
+            .contains(&s)
         {
             bail!("Invalid status");
         }
+        self.expire_handoffs().await?;
         let before = before.unwrap_or(i64::MAX);
         if before < 1 {
             bail!("Invalid cursor");
@@ -265,6 +325,7 @@ impl Publisher {
         Ok(json!({"items":rows,"next":next}))
     }
     pub(super) async fn get_handoff(&self, id: &str, owner: bool) -> Result<Value> {
+        self.expire_handoffs().await?;
         let row: Option<Handoff> =
             sqlx::query_as("SELECT rowid AS cursor,* FROM agent_handoffs WHERE id=?")
                 .bind(id)
@@ -306,7 +367,7 @@ impl Publisher {
         let hash = claim_digest(token);
         let _guard = self.0.mutation.lock().await;
         let mut tx = self.0.db.begin().await?;
-        let prior: Option<Handoff> = sqlx::query_as("SELECT rowid AS cursor,* FROM agent_handoffs WHERE id=? AND recipient_id=? AND status='claimed' AND lease_until>=unixepoch() AND claim_hash=?")
+        let prior: Option<Handoff> = sqlx::query_as("SELECT rowid AS cursor,* FROM agent_handoffs WHERE id=? AND recipient_id=? AND status='claimed' AND lease_until>=unixepoch() AND (expires_at IS NULL OR expires_at>unixepoch()) AND claim_hash=?")
             .bind(id).bind(self.connection_id()).bind(&hash).fetch_optional(&mut *tx).await?;
         if let Some(prior) = prior {
             let mut value = serde_json::to_value(prior)?;
@@ -314,7 +375,7 @@ impl Publisher {
             return Ok(value);
         }
         let changed = sqlx::query(
-            "UPDATE agent_handoffs SET status='claimed',claim_hash=?,lease_until=unixepoch()+?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),revision=revision+1 WHERE id=? AND recipient_id=? AND (status='queued' OR (status='claimed' AND lease_until<unixepoch())) AND EXISTS(SELECT 1 FROM agent_connections WHERE id=? AND disconnected=0)")
+            "UPDATE agent_handoffs SET status='claimed',claim_hash=?,lease_until=unixepoch()+?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),revision=revision+1 WHERE id=? AND recipient_id=? AND (status='queued' OR (status='claimed' AND lease_until<unixepoch())) AND (expires_at IS NULL OR expires_at>unixepoch()) AND EXISTS(SELECT 1 FROM agent_connections WHERE id=? AND disconnected=0)")
             .bind(hash).bind(LEASE_SECONDS).bind(id).bind(self.connection_id()).bind(self.connection_id())
             .execute(&mut *tx).await?;
         if changed.rows_affected() != 1 {
@@ -329,7 +390,7 @@ impl Publisher {
     }
     pub(super) async fn renew_handoff(&self, id: &str, token: &str) -> Result<Value> {
         let mut tx = self.0.db.begin().await?;
-        let changed=sqlx::query("UPDATE agent_handoffs SET lease_until=unixepoch()+?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),revision=revision+1 WHERE id=? AND recipient_id=? AND status='claimed' AND lease_until>=unixepoch() AND claim_hash=?")
+        let changed=sqlx::query("UPDATE agent_handoffs SET lease_until=unixepoch()+?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),revision=revision+1 WHERE id=? AND recipient_id=? AND status='claimed' AND lease_until>=unixepoch() AND (expires_at IS NULL OR expires_at>unixepoch()) AND claim_hash=?")
             .bind(LEASE_SECONDS).bind(id).bind(self.connection_id()).bind(claim_digest(token)).execute(&mut *tx).await?;
         if changed.rows_affected() != 1 {
             return Err(conflict("Claim expired or task is no longer active"));
@@ -349,7 +410,7 @@ impl Publisher {
             bail!("Result is empty or too long");
         }
         let mut tx = self.0.db.begin().await?;
-        let changed=sqlx::query("UPDATE agent_handoffs SET status=?,result=?,error=?,claim_hash=NULL,lease_until=NULL,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),revision=revision+1 WHERE id=? AND recipient_id=? AND status='claimed' AND lease_until>=unixepoch() AND claim_hash=?")
+        let changed=sqlx::query("UPDATE agent_handoffs SET status=?,result=?,error=?,claim_hash=NULL,lease_until=NULL,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),revision=revision+1 WHERE id=? AND recipient_id=? AND status='claimed' AND lease_until>=unixepoch() AND (expires_at IS NULL OR expires_at>unixepoch()) AND claim_hash=?")
             .bind(if failed {"failed"}else{"completed"})
             .bind(if failed {None}else{Some(input.message.as_str())})
             .bind(if failed {Some(input.message.as_str())}else{None})
@@ -363,8 +424,9 @@ impl Publisher {
         Ok(serde_json::to_value(row)?)
     }
     pub(super) async fn cancel_handoff(&self, id: &str) -> Result<Value> {
+        self.expire_handoffs().await?;
         let mut tx = self.0.db.begin().await?;
-        let changed=sqlx::query("UPDATE agent_handoffs SET status='cancelled',claim_hash=NULL,lease_until=NULL,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),revision=revision+1 WHERE id=? AND sender_id=? AND status IN ('queued','claimed')")
+        let changed=sqlx::query("UPDATE agent_handoffs SET status='cancelled',claim_hash=NULL,lease_until=NULL,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),revision=revision+1 WHERE id=? AND sender_id=? AND status IN ('queued','claimed') AND (expires_at IS NULL OR expires_at>unixepoch())")
             .bind(id).bind(self.connection_id()).execute(&mut *tx).await?;
         if changed.rows_affected() != 1 {
             return Err(conflict("Task cannot be cancelled"));
@@ -375,9 +437,10 @@ impl Publisher {
         Ok(serde_json::to_value(row)?)
     }
     pub(super) async fn acknowledge_handoff_result(&self, id: &str) -> Result<Value> {
+        self.expire_handoffs().await?;
         let _guard = self.0.mutation.lock().await;
         let mut tx = self.0.db.begin().await?;
-        let changed = sqlx::query("UPDATE agent_handoffs SET result_acknowledged_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),revision=revision+1 WHERE id=? AND sender_id=? AND status IN ('completed','failed','cancelled') AND result_acknowledged_at IS NULL AND EXISTS(SELECT 1 FROM agent_connections WHERE id=? AND disconnected=0)")
+        let changed = sqlx::query("UPDATE agent_handoffs SET result_acknowledged_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),revision=revision+1 WHERE id=? AND sender_id=? AND status IN ('completed','failed','cancelled','timed_out') AND result_acknowledged_at IS NULL AND EXISTS(SELECT 1 FROM agent_connections WHERE id=? AND disconnected=0)")
             .bind(id).bind(self.connection_id()).bind(self.connection_id())
             .execute(&mut *tx).await?;
         let row: Option<Handoff> =
@@ -528,6 +591,56 @@ async fn set_grant(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn deadline_migration_preserves_existing_tasks_and_cursors() {
+        let dir = tempfile::tempdir().unwrap();
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(dir.path().join("legacy.db"))
+            .create_if_missing(true);
+        let db = sqlx::SqlitePool::connect_with(options).await.unwrap();
+        sqlx::raw_sql("CREATE TABLE agent_connections(id TEXT PRIMARY KEY); CREATE TABLE events(sequence INTEGER PRIMARY KEY,kind TEXT,payload TEXT);")
+            .execute(&db).await.unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0018_agent_handoffs.sql"
+        ))
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0019_agent_handoff_result_receipts.sql"
+        ))
+        .execute(&db)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO agent_connections(id) VALUES('sender'),('receiver')")
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO agent_handoffs(id,request_id,sender_id,sender_name,recipient_id,recipient_name,title,instructions,status,result,result_acknowledged_at,revision) VALUES('old','request','sender','Muse','receiver','Grok','Legacy','Check','completed','Done','2026-09-23T00:00:00Z',4)")
+            .execute(&db).await.unwrap();
+        let cursor: i64 = sqlx::query_scalar("SELECT rowid FROM agent_handoffs WHERE id='old'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0020_agent_handoff_deadlines.sql"
+        ))
+        .execute(&db)
+        .await
+        .unwrap();
+        let row: (i64, String, String, i64, Option<i64>) = sqlx::query_as("SELECT rowid,result,result_acknowledged_at,revision,expires_at FROM agent_handoffs WHERE id='old'")
+            .fetch_one(&db).await.unwrap();
+        assert_eq!(
+            row,
+            (
+                cursor,
+                "Done".into(),
+                "2026-09-23T00:00:00Z".into(),
+                4,
+                None
+            )
+        );
+    }
     async fn fixture() -> (tempfile::TempDir, Publisher) {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::database(&format!(
@@ -562,6 +675,7 @@ mod tests {
             recipient_id: "receiver".into(),
             title: "Research".into(),
             instructions: "Review the facts".into(),
+            timeout_seconds: None,
         };
         assert!(sender.create_handoff(input()).await.is_err());
         sqlx::query(
@@ -681,6 +795,7 @@ mod tests {
                 recipient_id: "receiver".into(),
                 title: "Check".into(),
                 instructions: "Check this".into(),
+                timeout_seconds: None,
             })
             .await
             .unwrap();
@@ -749,5 +864,160 @@ mod tests {
         assert_eq!(history["items"][4]["task"]["action"], "result_acknowledged");
         assert!(!history.to_string().contains("claim_token"));
         assert!(sender.cancel_handoff(id).await.is_err());
+    }
+    #[tokio::test]
+    async fn deadline_is_terminal_audited_and_rejects_late_claims() {
+        let (_dir, p) = fixture().await;
+        sqlx::query(
+            "INSERT INTO agent_handoff_grants(sender_id,recipient_id) VALUES('sender','receiver')",
+        )
+        .execute(&p.0.db)
+        .await
+        .unwrap();
+        let sender = p.for_connection("sender");
+        let recipient = p.for_connection("receiver");
+        let request_id = Uuid::new_v4().to_string();
+        let input = || CreateHandoff {
+            request_id: request_id.clone(),
+            recipient_id: "receiver".into(),
+            title: "Probe".into(),
+            instructions: "Check".into(),
+            timeout_seconds: Some(60),
+        };
+        let created = sender.create_handoff(input()).await.unwrap();
+        let id = created["id"].as_str().unwrap();
+        assert_eq!(created["timeout_seconds"], 60);
+        assert!(created["expires_at"].as_i64().unwrap() > 0);
+        assert_eq!(sender.create_handoff(input()).await.unwrap(), created);
+        assert!(
+            sender
+                .create_handoff(CreateHandoff {
+                    timeout_seconds: Some(120),
+                    ..input()
+                })
+                .await
+                .is_err()
+        );
+        sqlx::query("UPDATE agent_handoffs SET expires_at=unixepoch()-1 WHERE id=?")
+            .bind(id)
+            .execute(&p.0.db)
+            .await
+            .unwrap();
+        assert!(
+            recipient
+                .claim_handoff(id, &Uuid::new_v4().to_string())
+                .await
+                .is_err()
+        );
+        let (first, second) = tokio::join!(p.expire_handoffs(), p.expire_handoffs());
+        assert_eq!(first.unwrap() + second.unwrap(), 1);
+        let timed_out = sender.get_handoff(id, false).await.unwrap();
+        assert_eq!(timed_out["status"], "timed_out");
+        assert_eq!(timed_out["revision"], 2);
+        assert!(
+            timed_out["error"]
+                .as_str()
+                .unwrap()
+                .contains("did not claim")
+        );
+        assert_eq!(p.expire_handoffs().await.unwrap(), 0);
+        assert!(sender.cancel_handoff(id).await.is_err());
+        assert_eq!(
+            sender.create_handoff(input()).await.unwrap()["status"],
+            "timed_out"
+        );
+        assert_eq!(
+            sender.acknowledge_handoff_result(id).await.unwrap()["status"],
+            "timed_out"
+        );
+        let history = sender.handoff_history(id, 0).await.unwrap();
+        let actions: Vec<_> = history["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["task"]["action"].as_str().unwrap())
+            .collect();
+        assert_eq!(actions, ["created", "timed_out", "result_acknowledged"]);
+    }
+    #[tokio::test]
+    async fn claimed_task_cannot_complete_after_deadline() {
+        let (_dir, p) = fixture().await;
+        sqlx::query(
+            "INSERT INTO agent_handoff_grants(sender_id,recipient_id) VALUES('sender','receiver')",
+        )
+        .execute(&p.0.db)
+        .await
+        .unwrap();
+        let sender = p.for_connection("sender");
+        let recipient = p.for_connection("receiver");
+        let created = sender
+            .create_handoff(CreateHandoff {
+                request_id: Uuid::new_v4().to_string(),
+                recipient_id: "receiver".into(),
+                title: "Probe".into(),
+                instructions: "Check".into(),
+                timeout_seconds: Some(60),
+            })
+            .await
+            .unwrap();
+        let id = created["id"].as_str().unwrap();
+        let token = Uuid::new_v4().to_string();
+        recipient.claim_handoff(id, &token).await.unwrap();
+        sqlx::query("UPDATE agent_handoffs SET expires_at=unixepoch()-1 WHERE id=?")
+            .bind(id)
+            .execute(&p.0.db)
+            .await
+            .unwrap();
+        assert!(recipient.renew_handoff(id, &token).await.is_err());
+        assert!(
+            recipient
+                .finish_handoff(
+                    id,
+                    FinishInput {
+                        claim_token: token,
+                        message: "late".into()
+                    },
+                    false
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(p.expire_handoffs().await.unwrap(), 1);
+        let row = sender.get_handoff(id, false).await.unwrap();
+        assert_eq!(row["status"], "timed_out");
+        assert!(
+            row["error"]
+                .as_str()
+                .unwrap()
+                .contains("external effects may be unknown")
+        );
+        assert!(row["lease_until"].is_null());
+    }
+    #[tokio::test]
+    async fn startup_worker_expires_abandoned_task_without_a_read() {
+        let (_dir, p) = fixture().await;
+        sqlx::query("INSERT INTO agent_handoffs(id,request_id,sender_id,sender_name,recipient_id,recipient_name,title,instructions,timeout_seconds,expires_at) VALUES('due','due-request','sender','Muse','receiver','Grok','Due','Check',60,unixepoch()-1)")
+            .execute(&p.0.db).await.unwrap();
+        let worker = p.start_worker();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let status: String =
+                    sqlx::query_scalar("SELECT status FROM agent_handoffs WHERE id='due'")
+                        .fetch_one(&p.0.db)
+                        .await
+                        .unwrap();
+                if status == "timed_out" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("startup deadline sweep");
+        p.0.shutdown.cancel();
+        worker.await.unwrap();
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events WHERE kind='agent.handoff' AND json_extract(payload,'$.id')='due' AND json_extract(payload,'$.action')='timed_out'")
+            .fetch_one(&p.0.db).await.unwrap();
+        assert_eq!(count, 1);
     }
 }

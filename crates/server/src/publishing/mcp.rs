@@ -47,7 +47,7 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "Create a task in a permitted agent's inbox. Use a stable request_id UUID on retries. Tell the user that delivery is queued until that agent checks its inbox; do not claim it was notified or accepted."
+        description = "Create a task in a permitted agent's inbox. Use a stable request_id UUID and identical arguments on retries. Optional timeout_seconds sets a server-enforced deadline (60–604800 seconds; default 86400). The recipient must claim and complete before it. Tell the user that queued is not delivered or accepted."
     )]
     async fn create_agent_task(
         &self,
@@ -61,7 +61,7 @@ impl PublishingTools {
             .map_err(|e| e.to_string())
     }
     #[tool(
-        description = "List tasks sent to or received by this connection. Poll this inbox for incoming work; filter status=queued or claimed and follow next with before to page. Status can be queued, claimed, completed, failed or cancelled."
+        description = "List tasks sent to or received by this connection. Poll this inbox for incoming work; filter status=queued or claimed and follow next with before to page. Status can be queued, claimed, completed, failed, cancelled or timed_out. Stop sender polling on any terminal status, including timed_out."
     )]
     async fn list_agent_tasks(
         &self,

@@ -40,10 +40,13 @@ export interface AgentHandoff {
   recipient_name: string;
   title: string;
   instructions: string;
-  status: "queued" | "claimed" | "completed" | "failed" | "cancelled";
+  status:
+    "queued" | "claimed" | "completed" | "failed" | "cancelled" | "timed_out";
   result: string | null;
   error: string | null;
   lease_until: number | null;
+  timeout_seconds: number | null;
+  expires_at: number | null;
   created_at: string;
   updated_at: string;
   revision: number;
@@ -77,6 +80,7 @@ const handoffStates: Record<AgentHandoff["status"], string> = {
   completed: "Completed",
   failed: "Needs attention",
   cancelled: "Cancelled",
+  timed_out: "Timed out",
 };
 export function upsertHandoff(row: AgentHandoff) {
   cache.setQueryData<InfiniteData<HandoffPage>>(["agent-handoffs"], (old) => {
@@ -106,7 +110,7 @@ export function upsertHandoff(row: AgentHandoff) {
 function Badge({ value }: { value: string }) {
   return (
     <span
-      className={`badge ${["Connected", "Uploaded", "Ready"].includes(value) ? "good" : value === "Needs attention" ? "warning" : ""}`}
+      className={`badge ${["Connected", "Uploaded", "Ready"].includes(value) ? "good" : ["Needs attention", "Timed out"].includes(value) ? "warning" : ""}`}
     >
       {value}
     </span>
@@ -941,6 +945,18 @@ function HandoffDetail({ id }: { id: string }) {
                 {new Date(row.created_at).toLocaleString()}
               </time>
             </dd>
+            {row.expires_at != null && (
+              <>
+                <dt>Deadline</dt>
+                <dd>
+                  <time
+                    dateTime={new Date(row.expires_at * 1000).toISOString()}
+                  >
+                    {new Date(row.expires_at * 1000).toLocaleString()}
+                  </time>
+                </dd>
+              </>
+            )}
             <dt>Instructions</dt>
             <dd className="handoff-text">{row.instructions}</dd>
             {row.result && (
@@ -1651,13 +1667,14 @@ function HandoffSteps({ id }: { id: string }) {
                     completed: "Completed",
                     failed: "Failed",
                     cancelled: "Cancelled",
+                    timed_out: "Timed out",
                   } as Record<string, string>
                 )[task.action] ?? handoffStates[task.status]}
               </strong>
               {task.action === "completed" && task.result && (
                 <span>{task.result}</span>
               )}
-              {task.action === "failed" && task.error && (
+              {["failed", "timed_out"].includes(task.action) && task.error && (
                 <p className="error">{task.error}</p>
               )}
             </li>

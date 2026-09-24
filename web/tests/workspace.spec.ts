@@ -105,6 +105,8 @@ test("agent handoff appears in Tasks and its result updates in place", async ({
     result: null,
     error: null,
     lease_until: null,
+    timeout_seconds: null,
+    expires_at: null,
     created_at: "2026-09-23T12:00:00Z",
     updated_at: "2026-09-23T12:00:00Z",
     revision: 1,
@@ -159,6 +161,62 @@ test("agent handoff appears in Tasks and its result updates in place", async ({
   await page.getByRole("link", { name: "View activity" }).click();
   await page.getByRole("button", { name: /Review episode/ }).click();
   await expect(page.getByText("Looks good")).toBeVisible();
+});
+test("timed-out handoff shows a terminal state and its deadline", async ({
+  page,
+}, testInfo) => {
+  const task = {
+    cursor: 2,
+    id: "timed-out-task",
+    request_id: "request-2",
+    sender_id: "muse",
+    sender_name: "Muse",
+    recipient_id: "grok",
+    recipient_name: "Grok",
+    title: "Review overdue episode",
+    instructions: "Check the transcript",
+    status: "timed_out",
+    result: null,
+    error: "Recipient did not claim the task before its deadline.",
+    lease_until: null,
+    timeout_seconds: 720,
+    expires_at: 1790165520,
+    created_at: "2026-09-23T12:00:00Z",
+    updated_at: "2026-09-23T12:12:00Z",
+    revision: 2,
+  };
+  await page.route("**/api/agent-handoffs", (r) =>
+    r.fulfill({ json: { items: [task], next: null } }),
+  );
+  await page.route("**/api/agent-handoffs/timed-out-task", (r) =>
+    r.fulfill({ json: task }),
+  );
+  for (const theme of ["dark", "light"]) {
+    await page.goto("/#/settings");
+    await page
+      .getByRole("radio", { name: theme === "dark" ? "Dark" : "Light" })
+      .check();
+    for (const width of [1440, 900, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto("/#/tasks");
+      const row = page.getByRole("row", { name: /Review overdue episode/ });
+      await expect(row).toContainText("Timed out");
+      await row.getByRole("link", { name: "Review overdue episode" }).click();
+      await expect(
+        page.getByText("Recipient did not claim the task before its deadline."),
+      ).toBeVisible();
+      await expect(page.getByText("Deadline", { exact: true })).toBeVisible();
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth > innerWidth,
+        ),
+      ).toBe(false);
+      await page.screenshot({
+        path: testInfo.outputPath(`${theme}-${width}-timeout.png`),
+        fullPage: true,
+      });
+    }
+  }
 });
 test("task access shows and edits multiple directed agent permissions", async ({
   page,
