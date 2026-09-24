@@ -178,7 +178,7 @@ impl Publisher {
     }
 }
 /// HTTP authentication schemes are case-insensitive (RFC 9110 §11.1).
-fn bearer_credential(headers: &HeaderMap) -> Result<&str, &'static str> {
+pub(super) fn bearer_credential(headers: &HeaderMap) -> Result<&str, &'static str> {
     let mut values = headers.get_all("authorization").iter();
     let value = values.next().ok_or("authorization_missing")?;
     if values.next().is_some() {
