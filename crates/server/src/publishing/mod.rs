@@ -4,6 +4,7 @@ use channel::ChannelDescriptionInput;
 mod assets;
 mod grok_webhook_adapter;
 mod guidance;
+mod handoff_candidate_probes;
 #[allow(dead_code)] // Activated only after a native adapter passes receiver conformance.
 mod handoff_dispatch;
 mod handoff_receiver_stream;

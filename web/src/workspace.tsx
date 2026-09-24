@@ -244,8 +244,15 @@ interface ReceiverStatus {
   verified_at?: number | null;
   proof_expires_at?: number | null;
 }
+interface ReceiverProbe {
+  id: string;
+  task_id: string;
+  transport_state: "started" | "admitted" | "not_sent" | "unknown";
+  task_status: AgentHandoff["status"];
+}
 function GrokReceiverSetup({ id }: { id: string }) {
   const connections = useConnections();
+  const handoffs = useHandoffs();
   const connection = connections.data?.find((item) => item.id === id);
   const status = useQuery<ReceiverStatus, Error>({
     queryKey: ["handoff-receiver", id],
@@ -254,6 +261,16 @@ function GrokReceiverSetup({ id }: { id: string }) {
   const [url, setUrl] = useState("");
   const [key, setKey] = useState("");
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [probeTaskId, setProbeTaskId] = useState("");
+  const eligible = handoffs.rows.filter(
+    (task) =>
+      task.recipient_id === id &&
+      task.delivery_mode === "pull" &&
+      task.status === "queued" &&
+      task.title === "AgentWay receiver probe" &&
+      task.instructions === "Confirm receipt. Do not publish anything." &&
+      (task.expires_at ?? 0) > Date.now() / 1000 + 60,
+  );
   const save = useMutation({
     mutationFn: async () => {
       await request(`/api/handoff-receivers/${id}`, {
@@ -281,6 +298,12 @@ function GrokReceiverSetup({ id }: { id: string }) {
       setConfirmRemove(false);
       cache.invalidateQueries({ queryKey: ["handoff-receiver", id] });
     },
+  });
+  const probe = useMutation({
+    mutationFn: (taskId: string) =>
+      request<ReceiverProbe>(`/api/handoff-receivers/${id}/probe`, {
+        task_id: taskId,
+      }),
   });
   if (connections.isPending || status.isPending) return <Loading />;
   if (connections.error || status.error)
@@ -359,6 +382,67 @@ function GrokReceiverSetup({ id }: { id: string }) {
           </div>
           <ErrorMessage error={save.error} />
         </form>
+        {status.data.grok_webhook_configured && !status.data.ready && (
+          <section className="panel pad">
+            <h2>Test receiver</h2>
+            <p>
+              Queue a pull task for this Bot titled “AgentWay receiver probe”
+              with instructions “Confirm receipt. Do not publish anything.”
+            </p>
+            {handoffs.error ? (
+              <ErrorMessage error={handoffs.error} />
+            ) : eligible.length ? (
+              <>
+                <label htmlFor="grok-probe-task">Queued task</label>
+                <select
+                  id="grok-probe-task"
+                  value={probeTaskId}
+                  onChange={(event) => setProbeTaskId(event.target.value)}
+                >
+                  <option value="">Choose a task</option>
+                  {eligible.map((task) => (
+                    <option key={task.id} value={task.id}>
+                      {task.sender_name} · {task.id.slice(0, 8)}
+                    </option>
+                  ))}
+                </select>
+                <div className="actions">
+                  <button
+                    disabled={!probeTaskId || probe.isPending || !!probe.data}
+                    onClick={() => probe.mutate(probeTaskId)}
+                  >
+                    {probe.isPending ? "Sending…" : "Send one test"}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <p>
+                {handoffs.isPending
+                  ? "Loading queued tasks…"
+                  : "No matching queued task."}
+              </p>
+            )}
+            {handoffs.hasNextPage && (
+              <button
+                disabled={handoffs.isFetchingNextPage}
+                onClick={() => handoffs.fetchNextPage()}
+              >
+                {handoffs.isFetchingNextPage ? "Loading…" : "Load older tasks"}
+              </button>
+            )}
+            {probe.data && (
+              <p role="status">
+                {probe.data.transport_state === "admitted"
+                  ? "Webhook run started. Check the task for an agent result."
+                  : probe.data.transport_state === "not_sent"
+                    ? "No webhook run started."
+                    : "Webhook outcome unknown. Do not send this task again."}{" "}
+                <a href={`#/tasks/${probe.data.task_id}`}>View task</a>
+              </p>
+            )}
+            <ErrorMessage error={probe.error} />
+          </section>
+        )}
         {status.data.enabled && (
           <section className="panel pad">
             {confirmRemove ? (
