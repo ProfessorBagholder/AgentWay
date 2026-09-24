@@ -13,6 +13,7 @@ const LEASE_SECONDS: i64 = 300;
 const DEFAULT_TIMEOUT_SECONDS: i64 = 86_400;
 const MIN_TIMEOUT_SECONDS: i64 = 60;
 const MAX_TIMEOUT_SECONDS: i64 = 604_800;
+const RESULT_DELIVERY_SECONDS: i64 = 604_800;
 #[derive(Debug)]
 pub(super) struct HandoffError {
     pub status: StatusCode,
@@ -67,6 +68,9 @@ pub(super) struct Handoff {
     pub lease_until: Option<i64>,
     pub timeout_seconds: Option<i64>,
     pub expires_at: Option<i64>,
+    pub delivery_mode: String,
+    pub sender_binding_generation: Option<i64>,
+    pub recipient_binding_generation: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
     pub revision: i64,
@@ -83,6 +87,10 @@ pub(super) struct CreateHandoff {
     pub instructions: String,
     /// Maximum lifetime in seconds, from creation through completion. Defaults to 24 hours; range 60 seconds to 7 days.
     pub timeout_seconds: Option<i64>,
+    /// Request automatic native delivery. Requires current verified receiver bindings
+    /// for both agents; omitted/false preserves the existing pull inbox.
+    #[serde(default)]
+    pub automatic_delivery: bool,
 }
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -215,6 +223,7 @@ impl Publisher {
                 || existing.instructions != input.instructions
                 || (existing.timeout_seconds.is_some() && existing.timeout_seconds != Some(timeout))
                 || (existing.timeout_seconds.is_none() && input.timeout_seconds.is_some())
+                || (existing.delivery_mode == "automatic") != input.automatic_delivery
             {
                 return Err(conflict("request_id already belongs to a different task"));
             }
@@ -230,14 +239,52 @@ impl Publisher {
             .bind(self.connection_id()).bind(&input.recipient_id).fetch_optional(&mut *tx).await?;
         let recipient =
             recipient.ok_or_else(|| forbidden("Recipient is not available or permitted"))?;
+        let binding_generations = if input.automatic_delivery {
+            let generations: Vec<(String, i64)> = sqlx::query_as(
+                "SELECT b.connection_id,b.generation FROM handoff_receiver_bindings b JOIN agent_connections c ON c.id=b.connection_id WHERE b.connection_id IN (?,?) AND b.enabled=1 AND b.verified_at IS NOT NULL AND b.proof_expires_at>unixepoch() AND c.disconnected=0",
+            )
+            .bind(self.connection_id())
+            .bind(&input.recipient_id)
+            .fetch_all(&mut *tx)
+            .await?;
+            if generations.len() != 2 {
+                return Err(conflict("Automatic handoff receiver is unavailable"));
+            }
+            let sender_generation = generations
+                .iter()
+                .find(|(id, _)| id == self.connection_id())
+                .map(|(_, generation)| *generation)
+                .ok_or_else(|| conflict("Automatic handoff sender is unavailable"))?;
+            let recipient_generation = generations
+                .iter()
+                .find(|(id, _)| id == &input.recipient_id)
+                .map(|(_, generation)| *generation)
+                .ok_or_else(|| conflict("Automatic handoff receiver is unavailable"))?;
+            Some((sender_generation, recipient_generation))
+        } else {
+            None
+        };
         let id = Uuid::new_v4().to_string();
-        sqlx::query("INSERT INTO agent_handoffs(id,request_id,sender_id,sender_name,recipient_id,recipient_name,title,instructions,timeout_seconds,expires_at) VALUES(?,?,?,?,?,?,?,?,?,unixepoch()+?)")
+        sqlx::query("INSERT INTO agent_handoffs(id,request_id,sender_id,sender_name,recipient_id,recipient_name,title,instructions,timeout_seconds,expires_at,delivery_mode,sender_binding_generation,recipient_binding_generation) VALUES(?,?,?,?,?,?,?,?,?,unixepoch()+?,?,?,?)")
             .bind(&id).bind(&input.request_id).bind(self.connection_id()).bind(sender.0)
             .bind(&input.recipient_id).bind(recipient.0).bind(&input.title).bind(&input.instructions)
             .bind(timeout).bind(timeout)
+            .bind(if input.automatic_delivery { "automatic" } else { "pull" })
+            .bind(binding_generations.map(|(sender, _)| sender))
+            .bind(binding_generations.map(|(_, recipient)| recipient))
             .execute(&mut *tx).await?;
         let row = Self::handoff_in_tx(&mut tx, &id).await?;
         Self::handoff_event(&mut tx, &row, "created").await?;
+        if let Some((_, recipient_generation)) = binding_generations {
+            Self::handoff_delivery(
+                &mut tx,
+                &row,
+                "task_offered",
+                &row.recipient_id,
+                recipient_generation,
+            )
+            .await?;
+        }
         tx.commit().await?;
         Ok(serde_json::to_value(row)?)
     }
@@ -262,6 +309,40 @@ impl Publisher {
             .await?;
         Ok(())
     }
+    async fn handoff_delivery(
+        tx: &mut Transaction<'_, Sqlite>,
+        row: &Handoff,
+        kind: &str,
+        connection_id: &str,
+        generation: i64,
+    ) -> Result<()> {
+        let expires_at = if kind == "task_offered" {
+            row.expires_at
+                .ok_or_else(|| conflict("Automatic task has no deadline"))?
+        } else {
+            // Return delivery has its own finite window after the task becomes terminal.
+            sqlx::query_scalar::<_, i64>("SELECT unixepoch()+?")
+                .bind(RESULT_DELIVERY_SECONDS)
+                .fetch_one(&mut **tx)
+                .await?
+        };
+        sqlx::query("INSERT INTO handoff_delivery_outbox(id,task_id,kind,connection_id,binding_generation,expires_at) VALUES(?,?,?,?,?,?)")
+            .bind(Uuid::new_v4().to_string()).bind(&row.id).bind(kind).bind(connection_id)
+            .bind(generation).bind(expires_at).execute(&mut **tx).await?;
+        Ok(())
+    }
+    async fn enqueue_result_delivery(
+        tx: &mut Transaction<'_, Sqlite>,
+        row: &Handoff,
+    ) -> Result<()> {
+        if row.delivery_mode == "automatic" {
+            let generation = row
+                .sender_binding_generation
+                .ok_or_else(|| conflict("Automatic task has no sender binding"))?;
+            Self::handoff_delivery(tx, row, "result_available", &row.sender_id, generation).await?;
+        }
+        Ok(())
+    }
     /// Materialize elapsed deadlines in the same transaction as their audit events.
     /// Called by the independent sweeper and before reads; late writes are fenced in SQL.
     pub(super) async fn expire_handoffs(&self) -> Result<usize> {
@@ -277,6 +358,7 @@ impl Publisher {
             for id in ids {
                 let row = Self::handoff_in_tx(&mut tx, &id).await?;
                 Self::handoff_event(&mut tx, &row, "timed_out").await?;
+                Self::enqueue_result_delivery(&mut tx, &row).await?;
             }
             tx.commit().await?;
             total += batch_size;
@@ -420,6 +502,7 @@ impl Publisher {
         }
         let row = Self::handoff_in_tx(&mut tx, id).await?;
         Self::handoff_event(&mut tx, &row, if failed { "failed" } else { "completed" }).await?;
+        Self::enqueue_result_delivery(&mut tx, &row).await?;
         tx.commit().await?;
         Ok(serde_json::to_value(row)?)
     }
@@ -433,6 +516,7 @@ impl Publisher {
         }
         let row = Self::handoff_in_tx(&mut tx, id).await?;
         Self::handoff_event(&mut tx, &row, "cancelled").await?;
+        Self::enqueue_result_delivery(&mut tx, &row).await?;
         tx.commit().await?;
         Ok(serde_json::to_value(row)?)
     }
@@ -640,6 +724,19 @@ mod tests {
                 None
             )
         );
+        sqlx::raw_sql(include_str!(
+            "../../../../migrations/0021_handoff_delivery_foundation.sql"
+        ))
+        .execute(&db)
+        .await
+        .unwrap();
+        let migrated: (i64, String, i64, Option<i64>) = sqlx::query_as(
+            "SELECT rowid,delivery_mode,revision,sender_binding_generation FROM agent_handoffs WHERE id='old'",
+        )
+        .fetch_one(&db)
+        .await
+        .unwrap();
+        assert_eq!(migrated, (cursor, "pull".into(), 4, None));
     }
     async fn fixture() -> (tempfile::TempDir, Publisher) {
         let dir = tempfile::tempdir().unwrap();
@@ -663,6 +760,157 @@ mod tests {
         (dir, p)
     }
     #[tokio::test]
+    async fn automatic_delivery_requires_two_current_bindings_and_commits_both_directions() {
+        let (_dir, p) = fixture().await;
+        sqlx::query(
+            "INSERT INTO agent_handoff_grants(sender_id,recipient_id) VALUES('sender','receiver')",
+        )
+        .execute(&p.0.db)
+        .await
+        .unwrap();
+        let sender = p.for_connection("sender");
+        let receiver = p.for_connection("receiver");
+        let request_id = Uuid::new_v4().to_string();
+        let input = || CreateHandoff {
+            request_id: request_id.clone(),
+            recipient_id: "receiver".into(),
+            title: "Probe".into(),
+            instructions: "Confirm receipt".into(),
+            timeout_seconds: Some(60),
+            automatic_delivery: true,
+        };
+        assert!(sender.create_handoff(input()).await.is_err());
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_handoffs")
+            .fetch_one(&p.0.db)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        for (id, product, generation) in [("sender", "Muse", 2), ("receiver", "Grok", 3)] {
+            sqlx::query("INSERT INTO handoff_receiver_bindings(connection_id,product,target_ciphertext,receiver_secret_hash,generation,enabled,verified_at,proof_expires_at) VALUES(?,?,?, ?,?,1,unixepoch(),unixepoch()+3600)")
+                .bind(id).bind(product).bind("encrypted-test-target").bind("test-hash")
+                .bind(generation).execute(&p.0.db).await.unwrap();
+        }
+        let created = sender.create_handoff(input()).await.unwrap();
+        let id = created["id"].as_str().unwrap();
+        assert_eq!(created["delivery_mode"], "automatic");
+        assert_eq!(created["sender_binding_generation"], 2);
+        assert_eq!(created["recipient_binding_generation"], 3);
+        let offer: (String, String, i64) = sqlx::query_as("SELECT kind,connection_id,binding_generation FROM handoff_delivery_outbox WHERE task_id=?")
+            .bind(id).fetch_one(&p.0.db).await.unwrap();
+        assert_eq!(offer, ("task_offered".into(), "receiver".into(), 3));
+        assert_eq!(sender.create_handoff(input()).await.unwrap(), created);
+        assert!(
+            sender
+                .create_handoff(CreateHandoff {
+                    automatic_delivery: false,
+                    ..input()
+                })
+                .await
+                .is_err()
+        );
+        let claim_token = Uuid::new_v4().to_string();
+        receiver.claim_handoff(id, &claim_token).await.unwrap();
+        receiver
+            .finish_handoff(
+                id,
+                FinishInput {
+                    claim_token,
+                    message: "Done".into(),
+                },
+                false,
+            )
+            .await
+            .unwrap();
+        let deliveries: Vec<(String, String, i64)> = sqlx::query_as("SELECT kind,connection_id,binding_generation FROM handoff_delivery_outbox WHERE task_id=? ORDER BY kind")
+            .bind(id).fetch_all(&p.0.db).await.unwrap();
+        assert_eq!(
+            deliveries,
+            vec![
+                ("result_available".into(), "sender".into(), 2),
+                ("task_offered".into(), "receiver".into(), 3)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_binding_blocks_creation_and_timeout_enqueues_one_return() {
+        let (_dir, p) = fixture().await;
+        sqlx::query(
+            "INSERT INTO agent_handoff_grants(sender_id,recipient_id) VALUES('sender','receiver')",
+        )
+        .execute(&p.0.db)
+        .await
+        .unwrap();
+        for id in ["sender", "receiver"] {
+            sqlx::query("INSERT INTO handoff_receiver_bindings(connection_id,product,target_ciphertext,receiver_secret_hash,generation,enabled,verified_at,proof_expires_at) VALUES(?,'test','cipher','hash',1,1,unixepoch(),unixepoch()+3600)")
+                .bind(id).execute(&p.0.db).await.unwrap();
+        }
+        let sender = p.for_connection("sender");
+        let input = || CreateHandoff {
+            request_id: Uuid::new_v4().to_string(),
+            recipient_id: "receiver".into(),
+            title: "Probe".into(),
+            instructions: "Check".into(),
+            timeout_seconds: Some(60),
+            automatic_delivery: true,
+        };
+        sqlx::query("UPDATE handoff_receiver_bindings SET verified_at=unixepoch()-7200,proof_expires_at=unixepoch()-1 WHERE connection_id='receiver'")
+            .execute(&p.0.db).await.unwrap();
+        assert!(sender.create_handoff(input()).await.is_err());
+        sqlx::query("UPDATE handoff_receiver_bindings SET proof_expires_at=unixepoch()+3600 WHERE connection_id='receiver'")
+            .execute(&p.0.db).await.unwrap();
+        let created = sender.create_handoff(input()).await.unwrap();
+        let id = created["id"].as_str().unwrap();
+        sqlx::query("UPDATE agent_handoffs SET expires_at=unixepoch()-1 WHERE id=?")
+            .bind(id)
+            .execute(&p.0.db)
+            .await
+            .unwrap();
+        assert_eq!(sender.expire_handoffs().await.unwrap(), 1);
+        assert_eq!(sender.expire_handoffs().await.unwrap(), 0);
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM handoff_delivery_outbox WHERE task_id=? AND kind='result_available'")
+            .bind(id).fetch_one(&p.0.db).await.unwrap();
+        assert_eq!(count, 1);
+    }
+    #[tokio::test]
+    async fn automatic_outbox_failure_rolls_back_task_and_event() {
+        let (_dir, p) = fixture().await;
+        sqlx::query(
+            "INSERT INTO agent_handoff_grants(sender_id,recipient_id) VALUES('sender','receiver')",
+        )
+        .execute(&p.0.db)
+        .await
+        .unwrap();
+        for id in ["sender", "receiver"] {
+            sqlx::query("INSERT INTO handoff_receiver_bindings(connection_id,product,target_ciphertext,receiver_secret_hash,generation,enabled,verified_at,proof_expires_at) VALUES(?,'test','cipher','hash',1,1,unixepoch(),unixepoch()+3600)")
+                .bind(id).execute(&p.0.db).await.unwrap();
+        }
+        sqlx::raw_sql("CREATE TRIGGER reject_offer BEFORE INSERT ON handoff_delivery_outbox WHEN NEW.kind='task_offered' BEGIN SELECT RAISE(ABORT, 'test outbox failure'); END;")
+            .execute(&p.0.db).await.unwrap();
+        let sender = p.for_connection("sender");
+        let result = sender
+            .create_handoff(CreateHandoff {
+                request_id: Uuid::new_v4().to_string(),
+                recipient_id: "receiver".into(),
+                title: "Probe".into(),
+                instructions: "Check".into(),
+                timeout_seconds: Some(60),
+                automatic_delivery: true,
+            })
+            .await;
+        assert!(result.is_err());
+        let task_count: i64 = sqlx::query_scalar("SELECT count(*) FROM agent_handoffs")
+            .fetch_one(&p.0.db)
+            .await
+            .unwrap();
+        let event_count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM events WHERE kind='agent.handoff'")
+                .fetch_one(&p.0.db)
+                .await
+                .unwrap();
+        assert_eq!((task_count, event_count), (0, 0));
+    }
+    #[tokio::test]
     async fn permission_idempotency_claim_and_cancel() {
         let (_dir, p) = fixture().await;
         let sender = p.for_connection("sender");
@@ -676,6 +924,7 @@ mod tests {
             title: "Research".into(),
             instructions: "Review the facts".into(),
             timeout_seconds: None,
+            automatic_delivery: false,
         };
         assert!(sender.create_handoff(input()).await.is_err());
         sqlx::query(
@@ -694,6 +943,14 @@ mod tests {
         assert_eq!(listed[0].recipient_id, "receiver");
         assert_eq!(sender.discover_agents().await.unwrap()[0]["id"], "receiver");
         let created = sender.create_handoff(input()).await.unwrap();
+        assert_eq!(created["delivery_mode"], "pull");
+        let pull_deliveries: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM handoff_delivery_outbox WHERE task_id=?")
+                .bind(created["id"].as_str().unwrap())
+                .fetch_one(&p.0.db)
+                .await
+                .unwrap();
+        assert_eq!(pull_deliveries, 0);
         assert!(
             sender
                 .acknowledge_handoff_result(created["id"].as_str().unwrap())
@@ -796,6 +1053,7 @@ mod tests {
                 title: "Check".into(),
                 instructions: "Check this".into(),
                 timeout_seconds: None,
+                automatic_delivery: false,
             })
             .await
             .unwrap();
@@ -883,6 +1141,7 @@ mod tests {
             title: "Probe".into(),
             instructions: "Check".into(),
             timeout_seconds: Some(60),
+            automatic_delivery: false,
         };
         let created = sender.create_handoff(input()).await.unwrap();
         let id = created["id"].as_str().unwrap();
@@ -957,6 +1216,7 @@ mod tests {
                 title: "Probe".into(),
                 instructions: "Check".into(),
                 timeout_seconds: Some(60),
+                automatic_delivery: false,
             })
             .await
             .unwrap();

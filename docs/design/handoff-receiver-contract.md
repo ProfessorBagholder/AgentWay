@@ -1,6 +1,6 @@
 # AgentWay receiver contract
 
-Status: common requirements for feasibility testing, 2026-09-23. **Full wire routes and schemas are not yet frozen; a pull-inbox sender receipt is implemented, but no native receiver has passed the complete suite.** This document specifies what **every** agent must do to participate in handoffs. The [architecture](handoff-delivery-architecture.md) owns the system design; the [compatibility matrix](handoff-receiver-compatibility.md) records whether each product can host a compliant receiver. The [conformance runbook](handoff-conformance-v1.md) is the same test for every product.
+Status: common requirements for feasibility testing, 2026-09-23. **Full receiver wire routes and schemas are not yet frozen; a pull-inbox sender receipt and automatic-delivery storage foundation exist, but no native receiver has passed the complete suite.** This document specifies what **every** agent must do to participate in handoffs. The [architecture](handoff-delivery-architecture.md) owns the system design; the [compatibility matrix](handoff-receiver-compatibility.md) records whether each product can host a compliant receiver. The [conformance runbook](handoff-conformance-v1.md) is the same test for every product.
 
 ## Product boundary
 
@@ -14,6 +14,8 @@ The receiver has two distinct actors:
 This split prevents a healthy background socket from being misreported as an agent that actually accepted work. If a product cannot wake the intended native agent or cannot establish that distinction, its integration fails the contract.
 
 The existing pull-inbox API now also has `POST /v1/agent-tasks/{id}/ack-result` (`acknowledge_agent_task_result` over MCP). Only the original sender's authenticated connection can call it after a terminal outcome. It is idempotent and stores `result_acknowledged_at` plus one history event. This is a **sender-declared receipt**, not proof that the result reached a native conversation; a compliant native adapter must call it only after that agent actually receives the result. Older rows remain unacknowledged. New pull tasks also have optional `timeout_seconds` (60–604800; default 86400) and immutable absolute `expires_at`; a server worker makes overdue queued or claimed work terminal `timed_out` and fences late claim/result writes. Legacy tasks retain no invented deadline. This bounds the AgentWay task only: it cannot pause a product-native routine or prove that external effects stopped. These are tested slices of the contract, not the binding, outbox or native-delivery implementation below.
+
+The [delivery foundation](handoff-delivery-foundation.md) stores candidate bindings and an outbox and writes offer/return records atomically for opted-in automatic tasks. Binding enrollment, transport admission, dispatch, native acceptance and return receipt remain unimplemented; the new mode fails closed until verified bindings can be established.
 
 ## Wire contract
 
