@@ -3,6 +3,8 @@ mod connections;
 use channel::ChannelDescriptionInput;
 mod assets;
 mod guidance;
+#[allow(dead_code)] // Activated only after a native adapter passes receiver conformance.
+mod handoff_dispatch;
 mod handoff_receivers;
 mod handoff_stream;
 mod handoffs;
