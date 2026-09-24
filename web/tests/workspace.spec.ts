@@ -88,6 +88,74 @@ test.beforeEach(async ({ page }) => {
     (window as any).EventSource = MockEvents;
   });
 });
+test("Grok receiver setup keeps the webhook key private and shows pending verification", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route("**/api/agent-connections", (route) =>
+    route.fulfill({
+      json: [
+        {
+          id: "grok",
+          name: "Grok",
+          product: "Grok",
+          revision: 1,
+          state: "Connected",
+          publish_enabled: false,
+          activity: null,
+        },
+      ],
+    }),
+  );
+  let configured = false;
+  await page.route("**/api/handoff-receivers/grok", async (route) => {
+    if (route.request().method() === "POST") {
+      const body = route.request().postDataJSON();
+      expect(body).toEqual({
+        native_target: "https://api2.cursor.sh/automations/webhook/probe",
+        grok_webhook_key: "private-key",
+      });
+      configured = true;
+      return route.fulfill({
+        json: { enabled: true, ready: false, receiver_token: "private-token" },
+      });
+    }
+    if (route.request().method() === "DELETE") {
+      configured = false;
+      return route.fulfill({ json: { enabled: false, ready: false } });
+    }
+    return route.fulfill({
+      json: {
+        enabled: configured,
+        ready: false,
+        grok_webhook_configured: configured,
+      },
+    });
+  });
+  await page.goto("/#/agents/grok");
+  await page.getByRole("link", { name: "Configure Grok webhook" }).click();
+  await page
+    .getByLabel("POST URL")
+    .fill("https://api2.cursor.sh/automations/webhook/probe");
+  await page.getByLabel("Key", { exact: true }).fill("private-key");
+  await page.getByRole("button", { name: "Save webhook" }).click();
+  await expect(page.getByText("Saved · Awaiting verification")).toBeVisible();
+  await expect(page.getByText("private-key")).toHaveCount(0);
+  await expect(page.getByText("private-token")).toHaveCount(0);
+  await expect(page.getByLabel("Key", { exact: true })).toHaveValue("");
+  await page.getByRole("button", { name: "Remove receiver" }).click();
+  await expect(
+    page.getByText("Pending deliveries to this receiver will stop."),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Remove receiver" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Add webhook" }),
+  ).toBeVisible();
+  await expect(page.getByText("Saved · Awaiting verification")).toHaveCount(0);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+});
 test("agent handoff appears in Tasks and its result updates in place", async ({
   page,
 }, testInfo) => {
