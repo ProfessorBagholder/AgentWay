@@ -64,7 +64,7 @@ impl DeliveryAdapter for GrokWebhookAdapter {
 
     async fn send(&self, envelope: &DeliveryEnvelope) -> TransportOutcome {
         let row: Option<(String, String)> = match sqlx::query_as(
-            "SELECT w.url_ciphertext,w.key_ciphertext FROM handoff_grok_webhooks w JOIN handoff_delivery_outbox o ON o.connection_id=w.connection_id AND o.binding_generation=w.binding_generation WHERE o.id=? AND o.state='pending' AND o.expires_at>unixepoch()",
+            "SELECT w.url_ciphertext,w.key_ciphertext FROM handoff_grok_webhooks w JOIN handoff_delivery_outbox o ON o.connection_id=w.connection_id AND o.binding_generation=w.binding_generation JOIN handoff_receiver_bindings b ON b.connection_id=o.connection_id AND b.generation=o.binding_generation JOIN agent_connections c ON c.id=o.connection_id JOIN agent_handoffs t ON t.id=o.task_id WHERE o.id=? AND o.state='pending' AND o.expires_at>unixepoch() AND b.enabled=1 AND b.verified_at IS NOT NULL AND b.proof_expires_at>unixepoch() AND c.disconnected=0 AND (o.kind='result_available' OR (t.status='queued' AND EXISTS(SELECT 1 FROM agent_handoff_grants g WHERE g.sender_id=t.sender_id AND g.recipient_id=t.recipient_id)))",
         )
         .bind(&envelope.id)
         .fetch_optional(&self.0.0.db)
