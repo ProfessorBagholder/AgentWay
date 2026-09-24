@@ -2,6 +2,7 @@ mod channel;
 mod connections;
 use channel::ChannelDescriptionInput;
 mod assets;
+mod grok_webhook_adapter;
 mod guidance;
 #[allow(dead_code)] // Activated only after a native adapter passes receiver conformance.
 mod handoff_dispatch;
@@ -243,7 +244,11 @@ impl Publisher {
     pub fn start_worker(&self) -> tokio::task::JoinHandle<()> {
         let this = self.clone();
         tokio::spawn(async move {
-            tokio::join!(this.worker(), this.handoff_deadline_worker());
+            tokio::join!(
+                this.worker(),
+                this.handoff_deadline_worker(),
+                this.grok_handoff_dispatch_worker()
+            );
         })
     }
     async fn setting(&self, key: &str) -> Result<Option<String>> {

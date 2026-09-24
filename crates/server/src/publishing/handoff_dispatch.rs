@@ -23,13 +23,16 @@ pub(super) struct DeliveryEnvelope {
 /// occurred. A timeout or lost response must be `Unknown`.
 #[derive(Clone)]
 pub(super) enum TransportOutcome {
-    Admitted { native_reference: String },
+    Admitted { native_reference: Option<String> },
     NotSent,
     Unknown,
 }
 
 pub(super) trait DeliveryAdapter {
     fn send(&self, envelope: &DeliveryEnvelope) -> impl Future<Output = TransportOutcome> + Send;
+    fn product(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 struct ReservedAttempt {
@@ -106,13 +109,17 @@ impl Publisher {
         Ok(rows.len() as u64)
     }
 
-    async fn reserve_handoff_attempt(&self) -> Result<Option<ReservedAttempt>> {
+    async fn reserve_handoff_attempt(
+        &self,
+        product: Option<&str>,
+    ) -> Result<Option<ReservedAttempt>> {
         let _guard = self.0.mutation.lock().await;
         let mut tx = self.0.db.begin().await?;
         let row: Option<(String, String, String, i64, i64, i64)> = sqlx::query_as(
-            "SELECT o.id,o.task_id,o.kind,o.binding_generation,o.expires_at,o.attempts FROM handoff_delivery_outbox o JOIN handoff_receiver_bindings b ON b.connection_id=o.connection_id AND b.generation=o.binding_generation JOIN agent_connections c ON c.id=o.connection_id JOIN agent_handoffs t ON t.id=o.task_id WHERE o.state='pending' AND o.due_at<=unixepoch() AND o.expires_at>unixepoch() AND o.attempts<? AND b.enabled=1 AND b.verified_at IS NOT NULL AND b.proof_expires_at>unixepoch() AND c.disconnected=0 AND NOT EXISTS(SELECT 1 FROM handoff_delivery_attempts a WHERE a.delivery_id=o.id AND a.state='started') AND (o.kind='result_available' OR (t.status='queued' AND EXISTS(SELECT 1 FROM agent_handoff_grants g WHERE g.sender_id=t.sender_id AND g.recipient_id=t.recipient_id))) ORDER BY o.due_at,o.rowid LIMIT 1",
+            "SELECT o.id,o.task_id,o.kind,o.binding_generation,o.expires_at,o.attempts FROM handoff_delivery_outbox o JOIN handoff_receiver_bindings b ON b.connection_id=o.connection_id AND b.generation=o.binding_generation JOIN agent_connections c ON c.id=o.connection_id JOIN agent_handoffs t ON t.id=o.task_id WHERE o.state='pending' AND o.due_at<=unixepoch() AND o.expires_at>unixepoch() AND o.attempts<? AND b.enabled=1 AND b.verified_at IS NOT NULL AND b.proof_expires_at>unixepoch() AND c.disconnected=0 AND (? IS NULL OR (b.product=? AND EXISTS(SELECT 1 FROM handoff_grok_webhooks w WHERE w.connection_id=o.connection_id AND w.binding_generation=o.binding_generation))) AND NOT EXISTS(SELECT 1 FROM handoff_delivery_attempts a WHERE a.delivery_id=o.id AND a.state='started') AND (o.kind='result_available' OR (t.status='queued' AND EXISTS(SELECT 1 FROM agent_handoff_grants g WHERE g.sender_id=t.sender_id AND g.recipient_id=t.recipient_id))) ORDER BY o.due_at,o.rowid LIMIT 1",
         )
         .bind(MAX_ATTEMPTS)
+        .bind(product).bind(product)
         .fetch_optional(&mut *tx)
         .await?;
         let Some((id, task_id, kind, binding_generation, expires_at, attempts)) = row else {
@@ -149,16 +156,20 @@ impl Publisher {
         let mut tx = self.0.db.begin().await?;
         let (state, attempt_state, code, due_at, reference) = match outcome {
             TransportOutcome::Admitted { native_reference }
-                if !native_reference.trim().is_empty()
-                    && native_reference.len() <= 255
-                    && !native_reference.chars().any(char::is_control) =>
+                if native_reference.as_ref().is_none_or(|reference| {
+                    !reference.trim().is_empty()
+                        && reference.len() <= 255
+                        && !reference.chars().any(char::is_control)
+                }) =>
             {
                 (
                     "admitted",
                     "admitted",
                     None,
                     None,
-                    Some(self.0.vault.seal(&native_reference)?),
+                    native_reference
+                        .map(|reference| self.0.vault.seal(&reference))
+                        .transpose()?,
                 )
             }
             TransportOutcome::Admitted { .. } | TransportOutcome::Unknown => (
@@ -217,7 +228,7 @@ impl Publisher {
         &self,
         adapter: &A,
     ) -> Result<bool> {
-        let Some(attempt) = self.reserve_handoff_attempt().await? else {
+        let Some(attempt) = self.reserve_handoff_attempt(adapter.product()).await? else {
             return Ok(false);
         };
         let outcome = adapter.send(&attempt.envelope).await;
@@ -278,7 +289,7 @@ mod tests {
     async fn admission_records_one_attempt_and_opaque_reference() {
         let (_dir, p, id) = fixture().await;
         let adapter = FakeAdapter(TransportOutcome::Admitted {
-            native_reference: "run-secret-123".into(),
+            native_reference: Some("run-secret-123".into()),
         });
         assert!(p.dispatch_one_handoff(&adapter).await.unwrap());
         assert!(!p.dispatch_one_handoff(&adapter).await.unwrap());
@@ -340,7 +351,7 @@ mod tests {
     #[tokio::test]
     async fn restart_marks_unfinished_send_uncertain_without_repeating_it() {
         let (dir, p, id) = fixture().await;
-        let reserved = p.reserve_handoff_attempt().await.unwrap().unwrap();
+        let reserved = p.reserve_handoff_attempt(None).await.unwrap().unwrap();
         assert_eq!(reserved.envelope.id, id);
         let db = p.0.db.clone();
         drop(p);
@@ -389,7 +400,7 @@ mod tests {
     #[tokio::test]
     async fn external_admission_wins_a_lost_transport_response() {
         let (_dir, p, id) = fixture().await;
-        let attempt = p.reserve_handoff_attempt().await.unwrap().unwrap();
+        let attempt = p.reserve_handoff_attempt(None).await.unwrap().unwrap();
         sqlx::query("UPDATE handoff_delivery_outbox SET state='admitted',admitted_at=unixepoch() WHERE id=?")
             .bind(&id).execute(&p.0.db).await.unwrap();
         p.finish_handoff_attempt(&attempt, TransportOutcome::Unknown)
